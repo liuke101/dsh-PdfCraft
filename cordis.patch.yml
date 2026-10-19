@@ -1,0 +1,11 @@
+# dsh-pdfcraft: one Host row. The browser half is discovered through the
+# package's `dsh.client` declaration; no separate client row is inserted.
+#
+# `webBuildDir` is where the person extracted the PdfCraft web release the
+# Panel names when it reports a missing build. The default keeps the build
+# under the Harness home; a per-profile override can point anywhere.
+- insert:
+    - id: pdfcraft
+      name: dsh-pdfcraft
+      config:
+        webBuildDir: !!js dshHomePath('pdfcraft', 'web')

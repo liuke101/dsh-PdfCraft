@@ -1,0 +1,42 @@
+{
+  "name": "dsh-pdfcraft",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A PdfCraft panel in DSH's right sidebar, served from the profile's own origin.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/*.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "node --check index.js && node --check client.js && node --check lib/paths.js && node --check lib/web-build.js"
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  },
+  "license": "MIT"
+}
