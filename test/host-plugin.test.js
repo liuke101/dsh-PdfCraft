@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply } from '../index.js'
+import { apply, Config } from '../index.js'
 
 /**
  * A recording Host context: the only facilities this plugin may use are the
@@ -103,16 +103,31 @@ async function installWebBuild(directory, { index = '<!doctype html><title>PdfCr
   await writeFile(join(directory, 'pdfcraft-web-abc123_bg.wasm'), Buffer.from([0, 97, 115, 109]))
 }
 
-test('registers one asset route and one status route, and withdrawing the plugin removes both', async () => {
+test('configuration carries one per-document size limit with a safe default', () => {
+  const defaults = Config({})
+  assert.equal(defaults.maxDocumentBytes, 32 * 1024 * 1024)
+  assert.equal(defaults.webBuildDir, '')
+  assert.throws(() => Config({ maxDocumentBytes: -1 }), /maxDocumentBytes/)
+  assert.throws(() => Config({ maxDocumentBytes: 1.5 }), /maxDocumentBytes/)
+})
+
+test('registers the asset, status and Workspace Document routes, and withdrawing the plugin removes them', async () => {
   const harness = createContext()
   apply(harness.ctx, { webBuildDir: '/nonexistent/pdfcraft-web' })
 
   harness.route('prefix', '/pdfcraft')
   harness.route('exact', '/pdfcraft/status')
-  assert.equal(harness.routes.length, 2)
+  harness.route('exact', '/pdfcraft/binding')
+  harness.route('exact', '/pdfcraft/document')
+  assert.equal(harness.routes.length, 4)
 
   harness.dispose()
-  assert.deepEqual(harness.removals.sort(), ['/pdfcraft', '/pdfcraft/status'])
+  assert.deepEqual(harness.removals.sort(), [
+    '/pdfcraft',
+    '/pdfcraft/binding',
+    '/pdfcraft/document',
+    '/pdfcraft/status',
+  ])
 })
 
 test('serves the app document and the web assembly with the types the browser requires', async () => {
