@@ -13,3 +13,9 @@ The five canonical roles keep their default strings: `needs-triage`, `needs-info
 ### Domain docs
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Commit Conventions
+
+This project follows Conventional Commits (<https://www.conventionalcommits.org/en/v1.0.0/>):
+`<type>(<scope>): <description> (#<ticket number>)`
+- Example: `feat(deploy): parameterized Hub install script + systemd service + closed registration (#4)`
