@@ -14,6 +14,7 @@ function createContext() {
   const routes = []
   const effects = []
   const removals = []
+  const listeners = new Map()
 
   const ctx = {
     webServer: {
@@ -26,6 +27,15 @@ function createContext() {
       const dispose = body()
       effects.push(dispose)
       return dispose
+    },
+    on(event, listener) {
+      const registered = listeners.get(event) ?? []
+      registered.push(listener)
+      listeners.set(event, registered)
+      return () => {}
+    },
+    logger: {
+      warn() {},
     },
   }
 
