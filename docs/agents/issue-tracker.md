@@ -2,6 +2,10 @@
 
 Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
 
+## Which surface to write through
+
+When the session has the mattpocock deck plugin mounted (its `deck_*` tools), those are the canonical write surface for issues: create, patch, label, close, report. `gh` stays the read path and covers anything the plugin does not expose. With no plugin mounted, `gh` does everything; the commands below still apply either way.
+
 ## Conventions
 
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.

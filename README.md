@@ -321,11 +321,14 @@ There is no build step and no TypeScript. The package is plain ESM for the Host 
 
 ```sh
 npm test                          # the whole suite, node:test
+npm run lint                      # eslint: no-undef and no-unused-vars
 npm run typecheck                 # node --check on every source file
 node --test test/document-routes.test.js   # one suite
 ```
 
-The tests use only Node's built-in test runner and assertion library; there are no test dependencies beyond the package's own.
+The tests use only Node's built-in test runner and assertion library; the only development dependency is the linter. `.github/workflows/check.yml` runs all three on every push and pull request.
+
+The browser half has no test seam: a change to `client.js`, the document routes, or the open tool is verified by hand. Follow [docs/agents/e2e-verification.md](docs/agents/e2e-verification.md).
 
 ```text
 index.js              Host half: configuration, HTTP routes, route wiring

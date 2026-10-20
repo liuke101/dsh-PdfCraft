@@ -14,6 +14,10 @@ The five canonical roles keep their default strings: `needs-triage`, `needs-info
 
 Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
 
+### End-to-end verification
+
+A change to `client.js`, the document routes, or the open tool is verified in the live interface, not just by the suite. Follow `docs/agents/e2e-verification.md`.
+
 ### Commit Conventions
 
 This project follows Conventional Commits (<https://www.conventionalcommits.org/en/v1.0.0/>):
