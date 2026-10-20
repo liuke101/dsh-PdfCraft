@@ -16,7 +16,7 @@ test('the package is a loadable bundle with a Host half, a browser half, and dis
   assert.equal(manifest.exports['.'], './index.js')
   assert.equal(manifest.exports['./client'], './client.js')
   assert.equal(manifest.exports['./locale/*.json'], './locale/*.json')
-  assert.equal(manifest.exports['./icon'], './icon.svg')
+  assert.equal(manifest.exports['./icon'], './icon.png')
 
   assert.equal(manifest.dsh.bundle.patch, './cordis.patch.yml')
   assert.equal(manifest.dsh.client.platform, 'web')
@@ -24,10 +24,12 @@ test('the package is a loadable bundle with a Host half, a browser half, and dis
   assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-locale'))
   assert.ok(manifest.dsh.client.inject.includes('@deepseek-ai/dsh-client-ui-sidebar-right'))
 
-  for (const file of ['index.js', 'client.js', 'cordis.patch.yml', 'icon.svg', 'locale/en.json', 'locale/zh.json']) {
+  for (const file of ['index.js', 'client.js', 'cordis.patch.yml', 'icon.png', 'locale/en.json', 'locale/zh.json']) {
     assert.ok((await stat(new URL(file, root))).isFile(), `${file} is part of the package`)
   }
-  assert.match(await text('icon.svg'), /^<svg\b/)
+  const icon = await readFile(new URL('icon.png', root))
+  assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'icon.png is a PNG')
+  assert.equal(icon.readUInt32BE(16), icon.readUInt32BE(20), 'the artwork is square')
 
   for (const locale of ['en', 'zh']) {
     const dictionary = JSON.parse(await text(`locale/${locale}.json`))

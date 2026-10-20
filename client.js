@@ -576,7 +576,7 @@ window.__ModuleLoader__.load({
       pointerEvents: 'none',
     }
 
-    /** The right-sidebar glyph; the Plugin Manager artwork comes from icon.svg. */
+    /** The right-sidebar glyph; the Plugin Manager artwork comes from icon.png. */
     function PdfCraftGlyph(props) {
       const size = typeof props?.size === 'number' ? props.size : 16
       return h(
