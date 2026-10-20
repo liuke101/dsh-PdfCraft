@@ -212,7 +212,7 @@ The agent opens the Panel with the `pdfcraft_open` tool:
 { "path": "reports/quarterly.pdf" }
 ```
 
-The path is optional; omitting it opens Standalone Mode. A later open for the same conversation replaces the bound Workspace Document. If the conversation is not on screen, the open waits and is delivered when it is; the result's `delivered` field says whether the browser received it immediately.
+The path is optional; omitting it opens Standalone Mode. A later open for the same conversation replaces the bound Workspace Document. If the conversation is not on screen, the open waits and is delivered when it is; the result reads `Opened …` when the browser received it immediately and `Queued …` when it waits for the conversation to come on screen.
 
 The agent's PDF tools are the upstream PdfCraft MCP tools under the namespace for the workspace:
 
