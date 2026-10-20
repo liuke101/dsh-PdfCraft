@@ -33,9 +33,10 @@
   },
   "scripts": {
     "test": "node --test",
-    "typecheck": "node --check index.js && node --check client.js && node --check lib/paths.js && node --check lib/web-build.js && node --check lib/agent-tools.js && node --check lib/workspace-document.js && node --check lib/document-routes.js"
+    "typecheck": "node --check index.js && node --check client.js && node --check lib/paths.js && node --check lib/web-build.js && node --check lib/agent-tools.js && node --check lib/workspace-document.js && node --check lib/document-routes.js && node --check lib/http.js && node --check lib/panel-opens.js && node --check lib/open-routes.js"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
     "@deepseek-ai/schemastery": "~3.18.5",
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1"
   },

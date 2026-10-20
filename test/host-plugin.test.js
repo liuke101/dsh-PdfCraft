@@ -117,11 +117,12 @@ test('configuration carries one per-document size limit with a safe default', ()
   const defaults = Config({})
   assert.equal(defaults.maxDocumentBytes, 32 * 1024 * 1024)
   assert.equal(defaults.webBuildDir, '')
+  assert.equal(defaults.openTool, true)
   assert.throws(() => Config({ maxDocumentBytes: -1 }), /maxDocumentBytes/)
   assert.throws(() => Config({ maxDocumentBytes: 1.5 }), /maxDocumentBytes/)
 })
 
-test('registers the asset, status and Workspace Document routes, and withdrawing the plugin removes them', async () => {
+test('registers the asset, status, Workspace Document and Push Channel routes, and withdrawing the plugin removes them', async () => {
   const harness = createContext()
   apply(harness.ctx, { webBuildDir: '/nonexistent/pdfcraft-web' })
 
@@ -129,13 +130,15 @@ test('registers the asset, status and Workspace Document routes, and withdrawing
   harness.route('exact', '/pdfcraft/status')
   harness.route('exact', '/pdfcraft/binding')
   harness.route('exact', '/pdfcraft/document')
-  assert.equal(harness.routes.length, 4)
+  harness.route('exact', '/pdfcraft/pushes')
+  assert.equal(harness.routes.length, 5)
 
   harness.dispose()
   assert.deepEqual(harness.removals.sort(), [
     '/pdfcraft',
     '/pdfcraft/binding',
     '/pdfcraft/document',
+    '/pdfcraft/pushes',
     '/pdfcraft/status',
   ])
 })

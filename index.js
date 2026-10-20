@@ -9,15 +9,30 @@
  * fiber, so uninstalling the bundle withdraws the HTTP surface and every
  * running engine with nothing left behind.
  *
- * The binding registry is also published as the `pdfcraftBindings` service.
- * That is the seam the Push Channel (#5) drives: it binds one Workspace Document
- * per conversation, and the Panel's routes resolve that binding.
+ * The binding registry is also published as the `pdfcraftBindings` service,
+ * and the Push Channel as `pdfcraftOpens`. The command and the model-facing
+ * tool create open requests there; the Panel's browser half holds the
+ * conversation's view open and the controller opens the page when one arrives.
+ *
+ * The Push Channel is how the harness half asks the browser to open the Panel.
+ * A request binds one Workspace Document per conversation, is delivered once
+ * to the conversation's view when that conversation is on screen, and waits
+ * otherwise. Turning the open entries off drains what is still waiting.
  */
 import Schema from '@deepseek-ai/schemastery'
 
 import { DEFAULT_CLI, registerAgentTools } from './lib/agent-tools.js'
 import { createBindingHandler, createDocumentHandler } from './lib/document-routes.js'
-import { ASSET_PREFIX, BINDING_PATH, DOCUMENT_PATH, PLUGIN_NAME, STATUS_PATH } from './lib/paths.js'
+import { createPushHandler } from './lib/open-routes.js'
+import { createPanelOpens, registerOpenCommand, registerOpenTool } from './lib/panel-opens.js'
+import {
+  ASSET_PREFIX,
+  BINDING_PATH,
+  DOCUMENT_PATH,
+  PLUGIN_NAME,
+  PUSHES_PATH,
+  STATUS_PATH,
+} from './lib/paths.js'
 import { createAssetHandler, createStatusHandler } from './lib/web-build.js'
 import {
   createBindingRegistry,
@@ -66,7 +81,13 @@ export const Config = Schema.object({
     .description(
       'Offer the compact PdfCraft tool surface (a few core tools plus search-and-call). '
       + 'Turn this off to expose the full tool catalogue, which costs much more context.',
-      + 'Turn this off to expose the full tool catalogue, which costs much more context.',
+    ),
+  openTool: Schema.boolean()
+    .default(true)
+    .description(
+      'Offer the person\'s /pdfcraft command and the agent\'s pdfcraft_open tool, which put a Workspace Document '
+      + 'in front of the person in the Panel. Turning this off withdraws both entries and drops any open request '
+      + 'that has not reached the browser yet.',
     ),
   maxDocumentBytes: Schema.natural()
     .default(DEFAULT_MAX_DOCUMENT_BYTES)
@@ -79,7 +100,7 @@ export const Config = Schema.object({
 /**
  * Register the Panel's HTTP surface and the per-conversation agent engines.
  * @param {import('@deepseek-ai/cordis').Context} ctx - Host context carrying the Web server.
- * @param {{ webBuildDir?: string, cliPath?: string, staticRoot?: string, compactSurface?: boolean }} [config] - resolved plugin configuration.
+ * @param {{ webBuildDir?: string, cliPath?: string, staticRoot?: string, compactSurface?: boolean, openTool?: boolean, maxDocumentBytes?: number }} [config] - resolved plugin configuration.
  */
 export function apply(ctx, config = {}) {
   const webBuildDir = typeof config.webBuildDir === 'string' ? config.webBuildDir : ''
@@ -93,6 +114,31 @@ export function apply(ctx, config = {}) {
     ctx.provide('pdfcraftBindings', bindings)
   }
   const revisions = createRevisionRegistry()
+
+  // One Push Channel per activation. It binds a document before it tells the
+  // browser, and the same instance is published for the harness-half seam and
+  // diagnostics. Turning the open entries off drops whatever was waiting.
+  const openTool = config.openTool !== false
+  const opens = createPanelOpens({
+    bindings,
+    enabled: openTool,
+    warn: (message) => ctx.logger?.warn?.(message),
+  })
+  if (typeof ctx.provide === 'function') {
+    ctx.provide('pdfcraftOpens', opens)
+  }
+  if (!openTool) {
+    opens.setEnabled(false)
+  } else {
+    ctx.effect(
+      () => registerOpenCommand(ctx, opens) ?? (() => {}),
+      'dsh-pdfcraft: /pdfcraft command',
+    )
+    ctx.effect(
+      () => registerOpenTool(ctx, opens) ?? (() => {}),
+      'dsh-pdfcraft: pdfcraft_open tool',
+    )
+  }
 
   ctx.effect(
     () => ctx.webServer.register({
@@ -121,6 +167,23 @@ export function apply(ctx, config = {}) {
       handler: createBindingHandler(bindings),
     }),
     'dsh-pdfcraft: Workspace Document binding route',
+  )
+
+  const pushSurface = createPushHandler(opens)
+  ctx.effect(
+    () => ctx.webServer.register({
+      kind: 'exact',
+      path: PUSHES_PATH,
+      handler: pushSurface.handler,
+    }),
+    'dsh-pdfcraft: Push Channel route',
+  )
+  ctx.effect(
+    () => () => {
+      pushSurface.close()
+      opens.dispose()
+    },
+    'dsh-pdfcraft: Push Channel streams',
   )
 
   ctx.effect(

@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
     const STATUS_PATH = '/pdfcraft/status'
     const BINDING_PATH = '/pdfcraft/binding'
     const DOCUMENT_PATH = '/pdfcraft/document'
+    const PUSHES_PATH = '/pdfcraft/pushes'
     const WEB_RELEASE = '0.9.0'
     const WEB_BUILD_FILENAME = `pdfcraft-web-${WEB_RELEASE}.zip`
 
@@ -76,6 +77,18 @@ window.__ModuleLoader__.load({
       return `${BINDING_PATH}?${new URLSearchParams({ session: sessionId }).toString()}`
     }
 
+    /**
+     * The conversation one Panel body belongs to. DSH's native seat passes
+     * `sessionId`; better-sidebar passes its SessionScope under `scope`; a
+     * caller with a Session object passes it under `session`.
+     */
+    function sessionIdOfPanelProps(props) {
+      if (typeof props?.sessionId === 'string' && props.sessionId !== '') return props.sessionId
+      if (typeof props?.scope?.sessionId === 'string' && props.scope.sessionId !== '') return props.scope.sessionId
+      if (typeof props?.session?.id === 'string' && props.session.id !== '') return props.session.id
+      return undefined
+    }
+
     /** The host route that serves a Workspace Document and accepts its Write-back. */
     function documentUrl(sessionId, documentPath) {
       return `${DOCUMENT_PATH}?${new URLSearchParams({
@@ -83,6 +96,69 @@ window.__ModuleLoader__.load({
         path: documentPath,
       }).toString()}`
     }
+
+    /** The host route that carries Panel open requests for one conversation. */
+    function pushUrl(sessionId) {
+      return `${PUSHES_PATH}?${new URLSearchParams({ session: sessionId }).toString()}`
+    }
+
+    /**
+     * Read one Push Channel frame. Only a declared `open` for a named
+     * conversation is accepted; a malformed frame is ignored rather than
+     * allowed to open the Panel for the wrong conversation.
+     */
+    function decodePushEvent(data) {
+      if (typeof data !== 'string') return undefined
+      let value
+      try {
+        value = JSON.parse(data)
+      } catch {
+        return undefined
+      }
+      if (value === null || typeof value !== 'object' || value.type !== 'open') return undefined
+      if (typeof value.sessionId !== 'string' || value.sessionId === '') return undefined
+      const document = value.document !== null
+        && typeof value.document === 'object'
+        && typeof value.document.path === 'string'
+        && value.document.path !== ''
+        ? {
+            path: value.document.path,
+            name: typeof value.document.name === 'string' && value.document.name !== ''
+              ? value.document.name
+              : value.document.path,
+          }
+        : null
+      return {
+        type: 'open',
+        id: typeof value.id === 'string' ? value.id : '',
+        sessionId: value.sessionId,
+        document,
+      }
+    }
+
+    /**
+     * The Panel body's revision of a push: one per conversation. A request
+     * that arrived while the body was not mounted still leaves the latest
+     * revision here, so the first mount reads it and fetches the new binding.
+     */
+    function createOpenFeed() {
+      let snapshot = { revision: 0, sessionId: '' }
+      const listeners = new Set()
+      return {
+        publish(sessionId) {
+          snapshot = { revision: snapshot.revision + 1, sessionId }
+          for (const listener of listeners) listener()
+        },
+        getSnapshot: () => snapshot,
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+      }
+    }
+
+    /** One feed shared by the Push Channel and the Panels it opens. */
+    const openFeed = createOpenFeed()
 
     /** A bridge message's bytes as a Uint8Array, accepting the two forms upstream sends. */
     function bridgeBytes(value) {
@@ -541,6 +617,136 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** Read the binding route's payload as a Workspace Document, or null for Standalone Mode. */
+    function normalizeBinding(payload) {
+      if (
+        payload === null
+        || typeof payload !== 'object'
+        || payload.document === null
+        || typeof payload.document !== 'object'
+        || typeof payload.document.path !== 'string'
+        || payload.document.path === ''
+      ) {
+        return null
+      }
+      return {
+        path: payload.document.path,
+        name: typeof payload.document.name === 'string' && payload.document.name !== ''
+          ? payload.document.name
+          : payload.document.path,
+      }
+    }
+
+    /** The sidebar controller when the host has one, probed without injecting it. */
+    function sidebarControllerOf(ctx) {
+      let right
+      try {
+        right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined
+      } catch {
+        right = undefined
+      }
+      right ??= ctx.sidebarRight
+      return right ?? undefined
+    }
+
+    /**
+     * Open the Panel for one conversation, but only while that conversation is
+     * the one on screen: the controller's open call is valid for the mounted
+     * Session alone. `false` means the request must wait.
+     */
+    function openPanelAt(right, sessionId) {
+      if (right === undefined || right === null) return false
+      let mounted
+      try {
+        mounted = right.mounted?.getSnapshot?.()
+      } catch {
+        return false
+      }
+      if (mounted !== sessionId) return false
+      try {
+        right.openTab(PAGE_KIND)
+        return true
+      } catch (error) {
+        console.warn?.(`dsh-pdfcraft: could not open the Panel for ${sessionId}:`, error?.message ?? error)
+        return false
+      }
+    }
+
+    /**
+     * Hold one Push Channel stream for the conversation on screen. A request
+     * for another conversation is not read until that conversation's stream is
+     * attached, so nothing is opened behind the person's back.
+     *
+     * @param {object} right - the `sidebarRight` controller.
+     * @param {ReturnType<typeof createOpenFeed>} feed - revisions the Panel reads.
+     * @returns {() => void} closes the stream and releases the subscription.
+     */
+    function startPushSource(right, feed) {
+      let source
+      let sessionId
+      let disposed = false
+
+      const stopSource = () => {
+        if (source === undefined) return
+        try {
+          source.close()
+        } catch {
+          // A source already closed by the browser is harmless.
+        }
+        source = undefined
+      }
+
+      const receive = (event) => {
+        const message = decodePushEvent(event?.data)
+        if (message === undefined || message.sessionId !== sessionId) return
+        feed.publish(message.sessionId)
+        if (openPanelAt(right, message.sessionId)) return
+        // A push can arrive while the page kind is still being registered at
+        // activation. One short retry keeps that race from losing the open;
+        // if the conversation moved on, the next attach replays nothing and
+        // the host's consume-on-send rule still holds.
+        setTimeout(() => {
+          if (!disposed && sessionId === message.sessionId) openPanelAt(right, message.sessionId)
+        }, 0)
+      }
+
+      const sync = () => {
+        if (disposed) return
+        let mounted
+        try {
+          mounted = right.mounted?.getSnapshot?.()
+        } catch {
+          mounted = undefined
+        }
+        const next = typeof mounted === 'string' && mounted !== '' ? mounted : undefined
+        if (next === sessionId) return
+        stopSource()
+        sessionId = next
+        if (sessionId === undefined || typeof EventSource !== 'function') return
+        try {
+          const opened = new EventSource(pushUrl(sessionId))
+          source = opened
+          opened.addEventListener('message', receive)
+        } catch (error) {
+          console.warn?.(`dsh-pdfcraft: could not hold the Push Channel for ${sessionId}:`, error?.message ?? error)
+        }
+      }
+
+      let unsubscribe
+      try {
+        unsubscribe = right.mounted?.subscribe?.(sync)
+      } catch {
+        unsubscribe = undefined
+      }
+      sync()
+
+      return () => {
+        disposed = true
+        if (typeof unsubscribe === 'function') unsubscribe()
+        stopSource()
+      }
+    }
+
     /**
      * One Panel component, closed over the context that owns its registration.
      *
@@ -554,14 +760,9 @@ window.__ModuleLoader__.load({
       const face = translationFace(ctx)
 
       return function PdfCraftPanel(props) {
-        // The native right sidebar hands the body its Session; better-sidebar
-        // hands the same thing under a `session` prop when it has one. Without
-        // either there is no conversation to bind, so the Panel stays standalone.
-        const sessionId = typeof props?.sessionId === 'string' && props.sessionId !== ''
-          ? props.sessionId
-          : typeof props?.session?.id === 'string' && props.session.id !== ''
-            ? props.session.id
-            : undefined
+        // Without a conversation there is nothing to bind, so the Panel stays
+        // standalone; with one, its binding decides between the two modes.
+        const sessionId = sessionIdOfPanelProps(props)
 
         const [attempt, setAttempt] = React.useState(0)
         const [check, setCheck] = React.useState({ phase: 'checking', status: null })
@@ -573,6 +774,16 @@ window.__ModuleLoader__.load({
         const [bridge, setBridge] = React.useState(() => initialBridgeState(null))
         const frameRef = React.useRef(null)
         const stateRef = React.useRef(bridge)
+        const openState = React.useSyncExternalStore(
+          openFeed.subscribe,
+          openFeed.getSnapshot,
+          openFeed.getSnapshot,
+        )
+        // A push for this conversation asks the body to read the binding again,
+        // even when the Page was already open and the controller only focused it.
+        const pushedRevision = sessionId !== undefined && openState.sessionId === sessionId
+          ? openState.revision
+          : 0
 
         const t = useTranslation(face)
 
@@ -621,16 +832,7 @@ window.__ModuleLoader__.load({
             })
             .then((payload) => {
               if (!live) return
-              const document = payload !== null && typeof payload === 'object'
-                && payload.document !== null && typeof payload.document === 'object'
-                && typeof payload.document.path === 'string' && payload.document.path !== ''
-                ? {
-                    path: payload.document.path,
-                    name: typeof payload.document.name === 'string' && payload.document.name !== ''
-                      ? payload.document.name
-                      : payload.document.path,
-                  }
-                : null
+              const document = normalizeBinding(payload)
               setBinding(document === null
                 ? { phase: 'standalone', document: null }
                 : { phase: 'bound', document })
@@ -643,6 +845,43 @@ window.__ModuleLoader__.load({
             live = false
           }
         }, [sessionId, attempt])
+
+        // A push for an already-open Panel must not replace the frame with the
+        // checking state: that would throw away unsaved work in the Embedded
+        // App. Refetch quietly and only commit when the bound document changed.
+        React.useEffect(() => {
+          if (sessionId === undefined || pushedRevision === 0) return undefined
+          let live = true
+          fetch(bindingUrl(sessionId), {
+            headers: { accept: 'application/json' },
+            cache: 'no-store',
+            credentials: 'same-origin',
+          })
+            .then((response) => {
+              if (!response.ok) throw new Error(`binding ${response.status}`)
+              return response.json()
+            })
+            .then((payload) => {
+              if (!live) return
+              const document = normalizeBinding(payload)
+              setBinding((current) => {
+                const currentDocument = current.phase === 'bound' ? current.document : null
+                const same = currentDocument === null
+                  ? document === null
+                  : document !== null && document.path === currentDocument.path
+                if (same) return current
+                return document === null
+                  ? { phase: 'standalone', document: null }
+                  : { phase: 'bound', document }
+              })
+            })
+            .catch(() => {
+              // The visible state stays usable; the next open retries the read.
+            })
+          return () => {
+            live = false
+          }
+        }, [sessionId, pushedRevision])
 
         const boundDocument = binding.phase === 'bound' ? binding.document : null
         const documentPath = boundDocument === null ? '' : boundDocument.path
@@ -1075,9 +1314,10 @@ window.__ModuleLoader__.load({
 
     return {
       name: 'dsh-pdfcraft',
-      inject: ['slots', 'locale', 'sidebarRightTabs'],
+      inject: ['slots', 'locale', 'sidebarRightTabs', 'sidebarRight'],
       // Cordis reads `name`, `inject` and `apply`; the Node seam test also
-      // drives the pure Host Bridge protocol from here.
+      // drives the pure Host Bridge protocol and the Push Channel framing
+      // from here.
       bridgeProtocol: {
         BRIDGE_MESSAGE,
         frameSource,
@@ -1087,12 +1327,27 @@ window.__ModuleLoader__.load({
         initialBridgeState,
         reduceBridge,
         describeDocumentFailure,
+        sessionIdOfPanelProps,
+      },
+      pushProtocol: {
+        PUSHES_PATH,
+        pushUrl,
+        decodePushEvent,
       },
       apply(ctx) {
         ctx.effect(
           () => ctx.locale.register(LOCALE_NS, { en: EN, zh: ZH }),
           'dsh-pdfcraft: dictionaries',
         )
+
+        // The Push Channel stream exists for the conversation on screen, not
+        // for the Panel only: the Panel may still be closed when the agent
+        // asks for it. A request for another conversation waits on the host.
+        ctx.effect(() => {
+          const right = sidebarControllerOf(ctx)
+          if (right === undefined) return undefined
+          return startPushSource(right, openFeed)
+        }, 'dsh-pdfcraft: Push Channel stream')
 
         // The two publication paths are alternatives, never both: better-sidebar
         // itself registers a native page for every tab type, so also registering

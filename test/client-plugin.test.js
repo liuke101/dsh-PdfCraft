@@ -40,9 +40,12 @@ function createClientContext({ betterSidebar } = {}) {
     locales: [],
     disposers: [],
     injects: [],
+    opened: [],
   }
   let active = 'en'
   const dictionaries = {}
+  let mountedSession
+  const mountedListeners = new Set()
 
   const locale = {
     register(namespace, dicts) {
@@ -97,11 +100,33 @@ function createClientContext({ betterSidebar } = {}) {
         },
       }
 
+  const sidebarRight = {
+    mounted: {
+      getSnapshot: () => mountedSession,
+      subscribe(listener) {
+        mountedListeners.add(listener)
+        return () => mountedListeners.delete(listener)
+      },
+    },
+    openTab(kind) {
+      registered.opened.push(kind)
+    },
+    setMounted(sessionId) {
+      mountedSession = sessionId
+      for (const listener of mountedListeners) listener()
+    },
+  }
+
   const ctx = {
     slots,
     locale,
+    sidebarRight,
     sidebarRightTabs,
-    get: (name) => (name === 'betterSidebar' ? service : undefined),
+    get: (name) => {
+      if (name === 'betterSidebar') return service
+      if (name === 'sidebarRight') return sidebarRight
+      return undefined
+    },
     effect(body, label) {
       const dispose = body()
       registered.disposers.push(dispose)
@@ -113,7 +138,7 @@ function createClientContext({ betterSidebar } = {}) {
     },
   }
 
-  return { ctx, registered, locale }
+  return { ctx, registered, locale, sidebarRight }
 }
 
 test('with the better-sidebar service, publishes exactly one page through it', async () => {
@@ -215,4 +240,95 @@ test('withdrawing the plugin releases every registration it made', async () => {
   plugin.apply(native.ctx)
   for (const dispose of native.registered.disposers) dispose()
   assert.equal(native.registered.types[0].removed, true)
+})
+
+/** A browser-shaped EventSource the push tests can drive. */
+function withFakeEventSource(run) {
+  const sources = []
+  const original = globalThis.EventSource
+  class FakeEventSource {
+    constructor(url) {
+      this.url = url
+      this.closed = false
+      this.listeners = new Map()
+      sources.push(this)
+    }
+
+    addEventListener(type, listener) {
+      const registered = this.listeners.get(type) ?? []
+      registered.push(listener)
+      this.listeners.set(type, registered)
+    }
+
+    close() {
+      this.closed = true
+    }
+
+    emit(data) {
+      for (const listener of this.listeners.get('message') ?? []) listener({ data })
+    }
+  }
+  globalThis.EventSource = FakeEventSource
+  try {
+    return run(sources)
+  } finally {
+    if (original === undefined) delete globalThis.EventSource
+    else globalThis.EventSource = original
+  }
+}
+
+test('a push opens the Panel only for the conversation on screen', async () => {
+  const plugin = await loadClientPlugin()
+  const { ctx, registered, sidebarRight } = createClientContext()
+  plugin.apply(ctx)
+
+  await withFakeEventSource((sources) => {
+    sidebarRight.setMounted('session-one')
+    assert.equal(sources.length, 1, 'one Push Channel view for the on-screen conversation')
+    assert.match(sources[0].url, /\/pdfcraft\/pushes\?session=session-one$/)
+
+    sources[0].emit(JSON.stringify({
+      type: 'open',
+      id: 'open-one',
+      sessionId: 'session-one',
+      document: { path: 'report.pdf', name: 'report.pdf' },
+    }))
+    assert.deepEqual(registered.opened, ['pdfcraft'])
+
+    sources[0].emit(JSON.stringify({ type: 'open', sessionId: 'session-two', document: null }))
+    sources[0].emit('not json')
+    assert.deepEqual(registered.opened, ['pdfcraft'], 'a frame for another conversation opens nothing')
+
+    sidebarRight.setMounted('session-two')
+    assert.equal(sources[0].closed, true, 'the old view is closed')
+    assert.equal(sources.length, 2, 'the new conversation gets its own view')
+    assert.match(sources[1].url, /session=session-two$/)
+  })
+})
+
+test('the push protocol names one route per conversation and rejects malformed frames', async () => {
+  const plugin = await loadClientPlugin()
+  const { pushProtocol } = plugin
+
+  assert.equal(pushProtocol.pushUrl('a b'), '/pdfcraft/pushes?session=a+b')
+  assert.deepEqual(pushProtocol.decodePushEvent('{"type":"open","sessionId":"s","document":null}'), {
+    type: 'open',
+    id: '',
+    sessionId: 's',
+    document: null,
+  })
+  assert.equal(pushProtocol.decodePushEvent('{"type":"other","sessionId":"s"}'), undefined)
+  assert.equal(pushProtocol.decodePushEvent('{"type":"open"}'), undefined)
+  assert.equal(pushProtocol.decodePushEvent('{'), undefined)
+})
+
+test('the Panel reads the conversation from either sidebar seat', async () => {
+  const plugin = await loadClientPlugin()
+  const { sessionIdOfPanelProps } = plugin.bridgeProtocol
+
+  assert.equal(sessionIdOfPanelProps({ sessionId: 'native' }), 'native')
+  assert.equal(sessionIdOfPanelProps({ scope: { sessionId: 'better' } }), 'better')
+  assert.equal(sessionIdOfPanelProps({ session: { id: 'session-object' } }), 'session-object')
+  assert.equal(sessionIdOfPanelProps({ scope: { sessionId: 'better' }, sessionId: 'native' }), 'native')
+  assert.equal(sessionIdOfPanelProps({}), undefined)
 })
