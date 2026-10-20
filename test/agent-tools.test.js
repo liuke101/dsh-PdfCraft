@@ -72,6 +72,13 @@ function createHostContext() {
  */
 function createAgent({ id, cwd }) {
   const mounts = []
+  const listeners = new Map()
+
+  const remove = (event, listener) => {
+    const list = listeners.get(event) ?? []
+    const index = list.indexOf(listener)
+    if (index >= 0) list.splice(index, 1)
+  }
 
   const agent = {
     id,
@@ -87,10 +94,26 @@ function createAgent({ id, cwd }) {
         mounts.push({ plugin, config, fiber })
         return fiber
       },
+      on(event, listener) {
+        const list = listeners.get(event) ?? []
+        list.push(listener)
+        listeners.set(event, list)
+        return () => remove(event, listener)
+      },
     },
   }
 
-  return { agent, mounts }
+  return {
+    agent,
+    mounts,
+    /** Events that stay on the agent's own scoped context, as a subagent's do. */
+    async emit(event, payload) {
+      for (const listener of [...(listeners.get(event) ?? [])]) await listener(payload)
+    },
+    listenerCount(event) {
+      return listeners.get(event)?.length ?? 0
+    },
+  }
 }
 
 async function workspace() {
@@ -223,6 +246,54 @@ test('an idle workspace releases its engine and a later turn starts it again', a
     assert.equal(mounts[1].config.serverName, mounts[0].config.serverName, 'the tool names stay stable')
   } finally {
     mock.timers.reset()
+    await area.cleanup()
+  }
+})
+
+test('an agent whose lifecycle events stay on its own context still releases its engine', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  const area = await workspace()
+  try {
+    const harness = createHostContext()
+    apply(harness.ctx, { cliPath: CLI })
+
+    const { agent, mounts, emit } = createAgent({ id: 'child', cwd: area.root })
+    await harness.emit('agent/created', { agent })
+    const first = mounts[0].fiber
+    assert.equal(first.disposed, false)
+
+    // A subagent's status is dispatched in its own context tree, which the host
+    // context's listeners never see; the engine has to listen where the agent does.
+    await emit('agent/status', { agent, status: 'idle' })
+    mock.timers.tick(60 * 60 * 1_000)
+    assert.equal(first.disposed, true, 'the scoped idle status releases the engine')
+
+    await emit('agent/status', { agent, status: 'running' })
+    await until(() => mounts.length === 2)
+    assert.equal(mounts[1].fiber.disposed, false, 'scoped activity starts the engine again')
+    assert.equal(mounts[1].config.serverName, mounts[0].config.serverName, 'the tool names stay stable')
+  } finally {
+    mock.timers.reset()
+    await area.cleanup()
+  }
+})
+
+test('a conversation disposed on its own context withdraws its engine and subscriptions', async () => {
+  const area = await workspace()
+  try {
+    const harness = createHostContext()
+    apply(harness.ctx, { cliPath: CLI })
+
+    const { agent, mounts, emit, listenerCount } = createAgent({ id: 'child', cwd: area.root })
+    await harness.emit('agent/created', { agent })
+    assert.ok(listenerCount('agent/status') > 0, 'the engine listens on the agent context')
+    assert.ok(listenerCount('agent/disposed') > 0, 'the engine listens for the agent leaving')
+
+    await emit('agent/disposed', { agent })
+    assert.equal(mounts[0].fiber.disposed, true, 'the scoped disposal withdraws the engine')
+    assert.equal(listenerCount('agent/status'), 0, 'status subscriptions are released with the conversation')
+    assert.equal(listenerCount('agent/disposed'), 0, 'disposal subscriptions are released too')
+  } finally {
     await area.cleanup()
   }
 })
