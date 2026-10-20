@@ -366,6 +366,25 @@ window.__ModuleLoader__.load({
       return translate('error.load')
     }
 
+    /**
+     * Read one refusal's body without ever throwing. This runs on the save path,
+     * where a body that is not the JSON the route promised would otherwise leave
+     * the bridge stuck in `saving` with no message and no way to retry.
+     */
+    async function readFailure(response) {
+      try {
+        const payload = await response.json()
+        if (payload !== null && typeof payload === 'object') return payload
+      } catch {
+        // Not JSON: fall through to the raw body.
+      }
+      try {
+        return { message: await response.text() }
+      } catch {
+        return {}
+      }
+    }
+
     const NATIVE_PAGE_ID = 'dsh-pdfcraft:panel'
     const BODY_SLOT = 'sidebar.right.pane.tab'
     const TITLE_SLOT = 'sidebar.right.pane.tab.title'
@@ -1326,6 +1345,7 @@ window.__ModuleLoader__.load({
         decodeBridgeMessage,
         initialBridgeState,
         reduceBridge,
+        readFailure,
         describeDocumentFailure,
         sessionIdOfPanelProps,
       },

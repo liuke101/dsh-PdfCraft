@@ -273,3 +273,34 @@ test('refusals are described in the plugin copy, naming the configured limit', a
     'host text',
   )
 })
+
+/**
+ * The refusal body is read on the save path, where a throw would strand the
+ * bridge in `saving`: the person would see neither the conflict dialog nor any
+ * message, and later saves would be dropped as out-of-phase.
+ */
+test('a refusal body is read without throwing, whatever the route sent', async () => {
+  const bridge = await loadBridgeProtocol()
+
+  const json = {
+    json: async () => ({ code: 'workspace-document/revision-conflict', message: 'changed on disk' }),
+    text: async () => { throw new Error('body consumed') },
+  }
+  assert.deepEqual(await bridge.readFailure(json), {
+    code: 'workspace-document/revision-conflict',
+    message: 'changed on disk',
+  })
+
+  const plain = {
+    json: async () => { throw new SyntaxError('Unexpected token <') },
+    text: async () => 'text/plain refusal',
+  }
+  assert.deepEqual(await bridge.readFailure(plain), { message: 'text/plain refusal' })
+
+  const unreadable = {
+    json: async () => { throw new SyntaxError('Unexpected token') },
+    text: async () => { throw new Error('stream closed') },
+  }
+  assert.deepEqual(await bridge.readFailure(unreadable), {})
+})
+
