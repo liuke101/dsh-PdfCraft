@@ -356,4 +356,4 @@ The domain vocabulary these documents use is in [GLOSSARY.md](GLOSSARY.md).
 
 ## License
 
-The plugin is MIT. PdfCraft is a separate project with its own MIT/Apache-2.0 licensing; this repository contains none of its code or binaries.
+The plugin is [MIT licensed](LICENSE). PdfCraft is a separate project with its own MIT/Apache-2.0 licensing; this repository contains none of its code or binaries.
