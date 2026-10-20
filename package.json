@@ -33,12 +33,17 @@
   },
   "scripts": {
     "test": "node --test",
-    "typecheck": "node --check index.js && node --check client.js && node --check lib/paths.js && node --check lib/web-build.js && node --check lib/agent-tools.js && node --check lib/workspace-document.js && node --check lib/document-routes.js && node --check lib/http.js && node --check lib/panel-opens.js && node --check lib/open-routes.js"
+    "lint": "eslint .",
+    "typecheck": "find . -name '*.js' -not -path './node_modules/*' -not -path './.npm-cache/*' -not -path './coverage/*' -not -path './.worktrees/*' -exec node --check {} \\;"
   },
   "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
-    "@deepseek-ai/schemastery": "~3.18.5",
-    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1"
+    "@deepseek-ai/schemastery": "~3.18.5"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0"
+  }
 }

@@ -78,9 +78,7 @@ function createClientContext({ betterSidebar } = {}) {
     },
     register(options, component) {
       registered.slotEntries.push({ options, component })
-      let live = true
-      const dispose = () => { live = false }
-      return dispose
+      return () => {}
     },
   }
 
@@ -127,7 +125,7 @@ function createClientContext({ betterSidebar } = {}) {
       if (name === 'sidebarRight') return sidebarRight
       return undefined
     },
-    effect(body, label) {
+    effect(body, _label) {
       const dispose = body()
       registered.disposers.push(dispose)
       return dispose
