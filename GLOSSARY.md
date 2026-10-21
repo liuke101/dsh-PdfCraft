@@ -4,6 +4,16 @@ Bringing PdfCraft to DeepSeek Harness: an agent that can work on PDFs in a works
 
 ## Language
 
+### Components
+
+**Web Component**:
+The activation entry of this bundle that serves the Panel: the Embedded App assets and readiness report, the Workspace Document routes, the binding registry, the Push Channel, the `/pdfcraft` command, and the `pdfcraft_open` tool. Activated by the `pdfcraft-web` Loader row from the bare package `dsh-pdfcraft`; not a separate package and not the upstream Web Build.
+_Avoid_: panel plugin, web package, frontend
+
+**CLI Component**:
+The activation entry of this bundle that runs one Engine per live agent. Activated by the `pdfcraft-cli` Loader row from the `dsh-pdfcraft/cli` subpath; not a separate package and not the upstream `pdfcraft-cli` binary.
+_Avoid_: backend, engine package, pdfcraft-cli plugin
+
 ### Surfaces
 
 **Panel**:

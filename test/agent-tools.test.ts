@@ -4,8 +4,10 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply } from '../src/web/index.ts'
-import type { AgentLike, HostContext } from '../src/web/host.ts'
+import { apply, Config } from '../src/cli/index.ts'
+import { apply as applyWeb } from '../src/web/index.ts'
+import type { AgentLike, HostContext } from '../src/cli/host.ts'
+import type { HostContext as WebHostContext } from '../src/web/host.ts'
 
 const CLI = '/opt/pdfcraft/pdfcraft-cli'
 
@@ -32,12 +34,18 @@ interface Mount {
 }
 
 /**
- * A recording Host context. Besides the Web server, this plugin uses three
- * Host facilities: the effect scope, agent lifecycle events, and the logger.
- * The child-plugin facility lives on the agent's own scoped context, so the
- * fake agent below records mounts the way the Agent scope would.
+ * A recording Host context. The CLI Component uses four Host facilities: the
+ * effect scope, agent lifecycle events, the live-agent registry, and the
+ * logger. The Web server is absent by default, which proves the engines need
+ * no Panel to run; the two-row test asks for one to compose both components in
+ * a single host. The child-plugin facility lives on the agent's own scoped
+ * context, so the fake agent below records mounts the way the Agent scope
+ * would.
  */
-function createHostContext() {
+function createHostContext({
+  webServer = false,
+  agents = [],
+}: { webServer?: boolean; agents?: AgentLike[] } = {}) {
   const routes: Array<{ kind: string; path: string; handler: unknown }> = []
   const effects: Array<() => unknown> = []
   const listeners = new Map<string, Array<(payload: unknown) => unknown>>()
@@ -50,11 +58,18 @@ function createHostContext() {
   }
 
   const context = {
-    webServer: {
-      register(route: { kind: string; path: string; handler: unknown }) {
-        routes.push(route)
-        return () => {}
-      },
+    ...webServer
+      ? {
+          webServer: {
+            register(route: { kind: string; path: string; handler: unknown }) {
+              routes.push(route)
+              return () => {}
+            },
+          },
+        }
+      : {},
+    agents: {
+      list: () => [...agents],
     },
     effect(body: () => (() => unknown) | undefined) {
       const dispose = body()
@@ -101,7 +116,11 @@ interface FakeAgent {
  * A fake live Agent: its scoped context records the child plugin it is asked
  * to mount and exposes the returned fiber's disposal.
  */
-function createAgent({ id, cwd }: { id: string; cwd?: string }): FakeAgent {
+function createAgent({
+  id,
+  cwd,
+  status,
+}: { id: string; cwd?: string; status?: string }): FakeAgent {
   const mounts: Mount[] = []
   const listeners = new Map<string, Array<(payload: unknown) => unknown>>()
 
@@ -113,6 +132,7 @@ function createAgent({ id, cwd }: { id: string; cwd?: string }): FakeAgent {
 
   const agent = {
     id,
+    status,
     session: { header: cwd === undefined ? {} : { cwd } },
     ctx: {
       plugin(plugin: unknown, config?: unknown) {
@@ -163,6 +183,111 @@ async function until(predicate: () => boolean): Promise<void> {
   }
   assert.fail('the expected engine work did not settle')
 }
+
+/** The engine mount every live Agent must get for one root. */
+function assertEngineMount(mount: Mount | undefined, root: string): void {
+  assert.ok(mount)
+  assert.equal(mount.config.command, CLI)
+  assert.deepEqual(mount.config.args, ['mcp', '--root', root, '--compact'])
+  assert.equal(mount.config.cwd, root)
+}
+
+test('the CLI row configures only the three engine fields', () => {
+  const defaults = Config({})
+  assert.equal(defaults.cliPath, 'pdfcraft-cli')
+  assert.equal(defaults.staticRoot, '')
+  assert.equal(defaults.compactSurface, true)
+  assert.deepEqual(Object.keys(defaults).sort(), ['cliPath', 'compactSurface', 'staticRoot'])
+  const extra = defaults as unknown as Record<string, unknown>
+  assert.equal(extra.webBuildDir, undefined, 'the web build directory belongs to the Web row')
+  assert.equal(extra.openTool, undefined, 'the open entries belong to the Web row')
+  assert.equal(extra.maxDocumentBytes, undefined, 'the document limit belongs to the Web row')
+  assert.throws(() => Config({ compactSurface: 'yes' } as never), /compactSurface/)
+
+  // A field from the other row is not validated here and cannot change this
+  // row's own values: the CLI Component reads only its three fields.
+  const foreign = Config({ compactSurface: false, webBuildDir: 42, openTool: 'no' } as never)
+  assert.equal(foreign.compactSurface, false)
+  assert.equal(foreign.cliPath, 'pdfcraft-cli')
+  assert.equal(foreign.staticRoot, '')
+})
+
+test('the CLI row mounts engines without the Panel\'s Web server', async () => {
+  const area = await workspace()
+  try {
+    const harness = createHostContext()
+    apply(harness.ctx, { cliPath: CLI })
+
+    const { agent, mounts } = createAgent({ id: 'no-panel', cwd: area.root })
+    await harness.emit('agent/created', { agent })
+
+    assert.equal(mounts.length, 1, 'the engine mounts with no Web server in the host')
+    assert.equal(harness.routes.length, 0, 'the CLI row serves no Panel route')
+  } finally {
+    await area.cleanup()
+  }
+})
+
+test('activating the CLI row again adopts agents that were already live', async () => {
+  const area = await workspace()
+  try {
+    const live = createAgent({ id: 'already-live', cwd: area.root })
+    const harness = createHostContext({ agents: [live.agent] })
+
+    // A row reload replaces the component fiber while the conversation stays
+    // open; the new activation has to reattach its engine, not wait for a new
+    // agent to be created.
+    apply(harness.ctx, { cliPath: CLI })
+    await until(() => live.mounts.length === 1)
+
+    assertEngineMount(live.mounts[0], area.root)
+    assert.ok(live.listenerCount('agent/disposed') > 0, 'the adopted agent is watched for disposal')
+  } finally {
+    await area.cleanup()
+  }
+})
+
+test('an agent adopted while idle still gets the idle grace', async () => {
+  mock.timers.enable({ apis: ['setTimeout'] })
+  const area = await workspace()
+  try {
+    const live = createAgent({ id: 'idle-live', cwd: area.root, status: 'idle' })
+    const harness = createHostContext({ agents: [live.agent] })
+
+    apply(harness.ctx, { cliPath: CLI })
+    await until(() => live.mounts.length === 1)
+    const engine = live.mounts[0]?.fiber
+    assert.ok(engine)
+    assert.equal(engine.disposed, false)
+
+    // Adoption happens while idle, so no `agent/status idle` arrives to start
+    // the usual five-minute timer; adoption has to start it itself.
+    mock.timers.tick(60 * 60 * 1_000)
+    assert.equal(engine.disposed, true, 'an adopted idle agent does not hold its engine')
+  } finally {
+    mock.timers.reset()
+    await area.cleanup()
+  }
+})
+
+test('both component rows activate in one host: Panel routes and the per-agent engine coexist', async () => {
+  const area = await workspace()
+  try {
+    const harness = createHostContext({ webServer: true })
+    applyWeb(harness.ctx as unknown as WebHostContext, { webBuildDir: join(area.root, 'not-there') })
+    apply(harness.ctx, { cliPath: CLI })
+
+    assert.equal(harness.routes.length, 5, 'the Web row serves the Panel surface')
+
+    const { agent, mounts } = createAgent({ id: 'both-rows', cwd: area.root })
+    await harness.emit('agent/created', { agent })
+
+    assert.equal(mounts.length, 1, 'the CLI row mounts an engine beside the Panel')
+    assertEngineMount(mounts[0], area.root)
+  } finally {
+    await area.cleanup()
+  }
+})
 
 test('mounts the shipped MCP bridge on the conversation workspace with the compact surface', async () => {
   const area = await workspace()

@@ -17,12 +17,10 @@
  * grace, and starts again on the next activity. Its lifecycle listeners follow
  * both the host context and the Agent's own scoped context, because a
  * subagent's status and disposal are dispatched inside the latter.
- * Unloading the plugin or disposing the Agent withdraws every remaining engine.
+ * Unloading the component or disposing the Agent withdraws every remaining engine.
  *
- * This module is mounted by the Web Component for now, so the package keeps
- * one entry and one Loader row while the split proceeds. The CLI Component
- * takes ownership of it in the next step; nothing else in the Panel depends on
- * it.
+ * The engines are the whole of the CLI Component (`src/cli/index.ts`): the
+ * Panel does not mount this module and the Web Component does not import it.
  */
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
@@ -250,7 +248,17 @@ export function registerAgentTools(ctx, config = {}) {
         }
         await release(entry);
     };
-    ctx.on?.('agent/created', async ({ agent }) => {
+    /**
+     * Record one Agent and start its engine.
+     *
+     * Both a fresh `agent/created` and an activation-time adoption go through
+     * here: a row reload replaces this component's fiber while conversations
+     * stay open, and the new activation must reattach their engines instead of
+     * leaving them without tools until the Agent is created again.
+     */
+    const adopt = async (agent, fromRegistry) => {
+        if (engines.has(agent.id))
+            return;
         const entry = {
             wanted: true,
             timer: undefined,
@@ -263,6 +271,14 @@ export function registerAgentTools(ctx, config = {}) {
         engines.set(agent.id, entry);
         subscribe(entry, agent);
         await provision(agent);
+        // A conversation adopted while idle emits no new idle status, so start the
+        // same grace timer a status event would have started. A running Agent
+        // keeps its engine until it goes idle.
+        if (fromRegistry && agent.status !== 'running')
+            scheduleIdleRelease(entry);
+    };
+    ctx.on?.('agent/created', async ({ agent }) => {
+        await adopt(agent, false);
     });
     ctx.on?.('agent/status', ({ agent, status }) => {
         applyStatus(agent, status);
@@ -270,7 +286,15 @@ export function registerAgentTools(ctx, config = {}) {
     ctx.on?.('agent/disposed', async ({ agent }) => {
         await retire(agent.id);
     });
-    // Unloading the plugin releases every engine it still owns.
+    // Adopt the conversations that were already live before this activation.
+    // The listener above only sees Agents created afterwards; a component reload
+    // (including one caused by toggling the other row) must not strand them.
+    for (const agent of ctx.agents?.list?.() ?? []) {
+        void adopt(agent, true).catch((error) => {
+            warn(`dsh-pdfcraft: attaching to an existing conversation failed: ${error.message}`);
+        });
+    }
+    // Unloading the component releases every engine it still owns.
     ctx.effect(() => () => {
         const entries = [...engines.values()];
         engines.clear();

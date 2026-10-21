@@ -122,13 +122,25 @@ async function installWebBuild(
   await writeFile(join(directory, 'pdfcraft-web-abc123_bg.wasm'), Buffer.from([0, 97, 115, 109]))
 }
 
-test('configuration carries one per-document size limit with a safe default', () => {
+test('the Web row configures only the Panel fields', () => {
   const defaults = Config({})
   assert.equal(defaults.maxDocumentBytes, 32 * 1024 * 1024)
   assert.equal(defaults.webBuildDir, '')
   assert.equal(defaults.openTool, true)
+  assert.deepEqual(Object.keys(defaults).sort(), ['maxDocumentBytes', 'openTool', 'webBuildDir'])
+  const extra = defaults as unknown as Record<string, unknown>
+  assert.equal(extra.cliPath, undefined, 'the engine path belongs to the CLI row')
+  assert.equal(extra.staticRoot, undefined, 'the static root belongs to the CLI row')
+  assert.equal(extra.compactSurface, undefined, 'the compact surface belongs to the CLI row')
   assert.throws(() => Config({ maxDocumentBytes: -1 }), /maxDocumentBytes/)
   assert.throws(() => Config({ maxDocumentBytes: 1.5 }), /maxDocumentBytes/)
+
+  // A field from the other row is not validated here and cannot change this
+  // row's own values: the Web Component reads only its three fields.
+  const foreign = Config({ maxDocumentBytes: 1024, cliPath: 42, compactSurface: 'no' })
+  assert.equal(foreign.maxDocumentBytes, 1024)
+  assert.equal(foreign.openTool, true)
+  assert.equal(foreign.webBuildDir, '')
 })
 
 test('registers the asset, status, Workspace Document and Push Channel routes, and withdrawing the plugin removes them', async () => {

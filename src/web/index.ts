@@ -9,9 +9,9 @@
  * browser half holds the conversation's view open, and the controller opens
  * the page when one arrives.
  *
- * The per-agent engine is still mounted here for one step, so the package
- * stays one entry and one Loader row while the split proceeds. The CLI
- * Component takes it over next; the Panel does not depend on it.
+ * The per-agent engines are the CLI Component's job. This component serves
+ * the Panel only, so disabling that row leaves the Panel working and disabling
+ * this row leaves the engines working.
  *
  * The Push Channel is how the harness half asks the browser to open the Panel.
  * A request binds one Workspace Document per conversation, is delivered once
@@ -20,7 +20,6 @@
  */
 import Schema from '@deepseek-ai/schemastery'
 
-import { DEFAULT_CLI, registerAgentTools } from '../cli/agent-tools.ts'
 import {
   ASSET_PREFIX,
   BINDING_PATH,
@@ -41,7 +40,7 @@ import {
   normalizeMaxBytes,
 } from './workspace-document.ts'
 
-/** Plugin name used in fiber diagnostics. */
+/** Plugin name used in fiber diagnostics; the browser half publishes the same id. */
 export const name = PLUGIN_NAME
 
 /**
@@ -64,24 +63,6 @@ export const Config = Schema.object({
       'Directory holding the extracted pdfcraft-web build (the folder that contains index.html). '
       + 'Download it from the PdfCraft release named by the Panel when this is empty or wrong.',
     ),
-  cliPath: Schema.string()
-    .default(DEFAULT_CLI)
-    .description(
-      'The pdfcraft-cli executable the agent\'s PDF engine runs, as an absolute path or a command on PATH. '
-      + 'Point this at the release you downloaded, or at a build of your own.',
-    ),
-  staticRoot: Schema.string()
-    .default('')
-    .description(
-      'Pin every conversation to this absolute directory instead of its own workspace. Leave empty to keep each '
-      + 'conversation confined to its own workspace; setting it trades that isolation for one shared root.',
-    ),
-  compactSurface: Schema.boolean()
-    .default(true)
-    .description(
-      'Offer the compact PdfCraft tool surface (a few core tools plus search-and-call). '
-      + 'Turn this off to expose the full tool catalogue, which costs much more context.',
-    ),
   openTool: Schema.boolean()
     .default(true)
     .description(
@@ -101,7 +82,8 @@ export const Config = Schema.object({
 export type WebConfig = ReturnType<typeof Config>
 
 /**
- * Register the Panel's HTTP surface and, for now, the per-conversation agent engines.
+ * Register the Panel's HTTP surface and publish the two services its command,
+ * tool and browser half share.
  * @param ctx - Host context carrying the Web server.
  * @param config - resolved plugin configuration.
  */
@@ -156,8 +138,6 @@ export function apply(ctx: HostContext, config: Partial<WebConfig> = {}): void {
     }),
     'dsh-pdfcraft: embedded app asset route',
   )
-
-  registerAgentTools(ctx, config)
 
   ctx.effect(
     () => ctx.webServer.register({

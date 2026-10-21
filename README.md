@@ -4,6 +4,8 @@ A DeepSeek Harness bundle that puts [PdfCraft](https://github.com/storytold/pdfc
 
 The workspace file is where the person and the agent meet. The Panel edits the real PDF on disk; the agent edits the same file through `pdfcraft-cli`; a save made in the Panel is written back under a revision guard, so a change the agent made in the meantime is never overwritten silently.
 
+The bundle installs once and activates as two components: the **Web Component** serves the Panel, and the **CLI Component** runs one PdfCraft engine per live agent. They share no runtime state and have separate configuration.
+
 The Embedded App is the unmodified upstream PdfCraft web build. It is served from the profile's own origin, not from a separate server and not from a copy checked into this repository.
 
 ## What you get
@@ -13,6 +15,17 @@ The Embedded App is the unmodified upstream PdfCraft web build. It is served fro
 - **One Workspace Document.** The Panel reads a Workspace Document from the conversation's workspace and writes saves back to it. By default, the agent's tools read and write the same directory.
 - **Containment.** The Panel's Workspace Document routes resolve every requested path to its real path and refuse anything outside the conversation's workspace. By default, the agent's engine runs with the same directory as its `--root`.
 - **No extra service.** There is no plugin-owned port, the plugin makes no outbound network requests, and there is no MCP row to configure by hand. The Panel's assets, Workspace Document routes and open channel all live on the DSH profile's own origin.
+
+### Components and rows
+
+The bundle patch inserts two Loader rows, and both are active at once:
+
+| Row | Module | Owns |
+|---|---|---|
+| `pdfcraft-web` | `dsh-pdfcraft` (the bare package name) | The Embedded App assets and readiness report, the Workspace Document read and Write-back routes, the binding registry and Push Channel services, the `/pdfcraft` command, and the `pdfcraft_open` tool. |
+| `pdfcraft-cli` | `dsh-pdfcraft/cli` | The per-agent PdfCraft engines and their lifecycle. |
+
+The Web row keeps the bare package name because the shell's `dsh-client-modules` reads a package's `dsh.client` declaration only from a bare Loader row. The Panel's browser half is part of that package, so it activates with the Web row: disabling `pdfcraft-web` withdraws the Panel page and its routes as well as the command and the open tool. Disabling `pdfcraft-cli` withdraws only the agent's engines; the Panel keeps opening, reading and writing back. Disabling `pdfcraft-web` leaves the MCP tools working, because they live in the CLI Component.
 
 ```text
 Person ── right-sidebar Panel ── iframe ──▶ PdfCraft web build (/pdfcraft/)
@@ -142,6 +155,7 @@ Start DSH and check the result:
 dsh web
 ```
 
+- The plugin list shows two active rows, `pdfcraft-web` and `pdfcraft-cli`. Both must be active for the Panel and the agent's tools together; each works without the other.
 - The right sidebar has exactly one **PdfCraft** entry: through DSH-better-sidebar when that plugin is active, otherwise through DSH's own right sidebar. The plugin never registers both.
 - Typing `/pdfcraft` in a conversation opens the Panel in Standalone Mode.
 - The agent's tool list contains tools named `mcp__pdfcraft-<hash>__<tool>`; the hash is derived from the workspace and stays stable for it.
@@ -149,36 +163,63 @@ dsh web
 
 ## 4. Configure it
 
-The defaults work when the web build is at `$DSH_HOME/pdfcraft/web` and `pdfcraft-cli` is on `PATH`. To change anything, add an override for the bundle's row in the profile patch:
+The defaults work when the web build is at `$DSH_HOME/pdfcraft/web` and `pdfcraft-cli` is on `PATH`. To change anything, add an override for the row you are changing in the profile patch:
 
 `$DSH_HOME/profiles/web/cordis.patch.yml`
 
 ```yaml
-- id: pdfcraft
+- id: pdfcraft-web
   name: dsh-pdfcraft
   config:
     webBuildDir: !!js dshHomePath('pdfcraft', 'web')
+    openTool: true
+    maxDocumentBytes: 33554432
+- id: pdfcraft-cli
+  name: dsh-pdfcraft/cli
+  config:
     cliPath: /home/me/.local/bin/pdfcraft-cli
     staticRoot: ''
     compactSurface: true
-    openTool: true
-    maxDocumentBytes: 33554432
 ```
 
-A profile patch **replaces the row's whole `config` object**, so include every field you want to keep. The example shows every field. All values except `cliPath` are the shipped defaults; `cliPath` points at the path installed above. Change only the values you need, but keep `webBuildDir` (or set it explicitly) rather than dropping it by accident. Configuration changes apply when the profile reloads; restart DSH if your profile does not use HMR.
+A profile patch **replaces the row's whole `config` object**, so include every field you want to keep on that row. The example shows every field of both rows. All values except `cliPath` are the shipped defaults; `cliPath` points at the path installed above. Change only the values you need, but keep `webBuildDir` (or set it explicitly) on the Web row rather than dropping it by accident. Configuration changes apply when the profile reloads; restart DSH if your profile does not use HMR.
+
+### Migrating from the old single row
+
+Before 0.2.0 the bundle inserted one row, `pdfcraft`, with all six fields. The split moves each field to the component that owns it:
+
+| Old field on `pdfcraft` | New row | New field |
+|---|---|---|
+| `webBuildDir` | `pdfcraft-web` | `webBuildDir` |
+| `openTool` | `pdfcraft-web` | `openTool` |
+| `maxDocumentBytes` | `pdfcraft-web` | `maxDocumentBytes` |
+| `cliPath` | `pdfcraft-cli` | `cliPath` |
+| `staticRoot` | `pdfcraft-cli` | `staticRoot` |
+| `compactSurface` | `pdfcraft-cli` | `compactSurface` |
+
+A profile patch that still targets `- id: pdfcraft` matches no row after the upgrade. The Loader warns `patch: entry "pdfcraft" not found` and skips that patch, so the bundle runs with its defaults until you move the overrides to the two rows above. The old row's values do not carry over automatically.
 
 ### Every configuration field
 
+Each row validates only its own fields; a field placed on the other row is not read by it.
+
+**Web Component (`pdfcraft-web`)**
+
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `webBuildDir` | string | `$DSH_HOME/pdfcraft/web` via the bundle patch; the schema default is an empty string | Directory containing the extracted web build's `index.html`. An empty or wrong value leaves the plugin mounted and makes the Panel show the missing-build card naming what to fetch. The web build is never downloaded by the plugin. |
-| `cliPath` | string | `pdfcraft-cli`, resolved through `PATH` | The `pdfcraft-cli` executable the agent's engine runs. Use an absolute path to pin a specific release. An empty value falls back to `pdfcraft-cli`. |
-| `staticRoot` | string | `""`, meaning each conversation's own workspace | **Agent tools only.** Pin every agent's engine to this absolute directory instead of its conversation's workspace. It must exist; otherwise no engine starts and the warning names the root. This gives up per-conversation isolation; the Panel stays confined to the conversation workspace either way. |
-| `compactSurface` | boolean | `true` | Offer the compact agent surface: a small core set of tools plus `tool_search` and `tool_call`, which reach every remaining tool. Set to `false` to expose the full catalogue, at a much higher context cost. |
+| `webBuildDir` | string | `$DSH_HOME/pdfcraft/web` via the bundle patch; the schema default is an empty string | Directory containing the extracted web build's `index.html`. An empty or wrong value leaves the component mounted and makes the Panel show the missing-build card naming what to fetch. The web build is never downloaded by the plugin. |
 | `openTool` | boolean | `true` | Register the person's `/pdfcraft` command and the agent's `pdfcraft_open` tool. Set to `false` to withdraw both and drop any open request that has not reached the browser yet; an already-open Panel is untouched. |
 | `maxDocumentBytes` | integer | `33554432` (32 MiB) | Largest Workspace Document the Panel will open or save, in bytes. A larger read or Write-back is refused with a message naming this limit. **This does not limit the agent's tools**, which use the upstream engine directly. |
 
-The six fields above are the whole configuration surface. The bundle patch points `webBuildDir` at the Harness home; if you install the package by some other route, set it explicitly.
+**CLI Component (`pdfcraft-cli`)**
+
+| Field | Type | Default | What it does |
+|---|---|---|---|
+| `cliPath` | string | `pdfcraft-cli`, resolved through `PATH` | The `pdfcraft-cli` executable the agent's engine runs. Use an absolute path to pin a specific release. An empty value falls back to `pdfcraft-cli`. |
+| `staticRoot` | string | `""`, meaning each conversation's own workspace | Pin every agent's engine to this absolute directory instead of its conversation's workspace. It must exist; otherwise no engine starts and the warning names the root. This gives up per-conversation isolation; the Panel stays confined to the conversation workspace either way. |
+| `compactSurface` | boolean | `true` | Offer the compact agent surface: a small core set of tools plus `tool_search` and `tool_call`, which reach every remaining tool. Set to `false` to expose the full catalogue, at a much higher context cost. |
+
+The three fields on each row are that row's whole configuration surface. The bundle patch points the Web row's `webBuildDir` at the Harness home; if you install the package by some other route, set it explicitly.
 
 ## 5. Use it
 
@@ -214,7 +255,7 @@ The agent opens the Panel with the `pdfcraft_open` tool:
 
 The path is optional; omitting it opens Standalone Mode. A later open for the same conversation replaces the bound Workspace Document. If the conversation is not on screen, the open waits and is delivered when it is; the result reads `Opened …` when the browser received it immediately and `Queued …` when it waits for the conversation to come on screen.
 
-The agent's PDF tools are the upstream PdfCraft MCP tools under the namespace for the workspace:
+The agent's PDF tools are the upstream PdfCraft MCP tools under the namespace for the workspace. They belong to the CLI Component: disabling `pdfcraft-cli` withdraws them, and the Panel keeps working.
 
 ```text
 mcp__pdfcraft-<hash>__doc_open
@@ -227,7 +268,7 @@ The hash is derived from the Agent MCP Root and stays stable for a given workspa
 
 > Open `reports/quarterly.pdf` in the PdfCraft Panel, then summarize page 3 and add a bookmark called "Summary".
 
-Engine lifecycle: an engine starts when an agent appears or starts running, is released after five minutes with no activity, and starts again on the next activity. Disposing the agent or unloading the plugin withdraws it. A conversation with no workspace gets no engine and a warning.
+Engine lifecycle: an engine starts when an Agent appears or starts running, or when the CLI Component activates with the conversation already open, is released after five minutes with no activity, and starts again on the next activity. Disposing the Agent or unloading the CLI Component withdraws it. A conversation with no workspace gets no engine and a warning.
 
 ## When something is missing
 
@@ -275,7 +316,7 @@ command -v pdfcraft-cli
 pdfcraft-cli --version
 ```
 
-If it is not on `PATH`, set `cliPath` to its absolute path in the profile patch and restart. The Panel's Workspace Document routes never need the command-line tool; the agent's MCP tools do.
+If it is not on `PATH`, set `cliPath` on the `pdfcraft-cli` row in the profile patch and restart. If the binary is present but the tools are absent, check that `pdfcraft-cli` is active in the plugin list; disabling that row withdraws the tools without touching the Panel. The Panel's Workspace Document routes never need the command-line tool; the agent's MCP tools do.
 
 ### The open was queued rather than delivered
 
@@ -301,8 +342,9 @@ These are properties of this design, not bugs to report:
 ## Upgrading
 
 - **Web build**: replace the contents of `webBuildDir` with a newer extracted release and point `webBuildDir` at it. This plugin is tested against `0.9.0`; a newer build must still speak the upstream Host Bridge protocol (`pdfcraft:ready`, `pdfcraft:open`, `pdfcraft:save`, `pdfcraft:dirty`, `pdfcraft:failed`). If upstream changes it, upgrade the plugin too.
-- **Command-line engine**: point `cliPath` at a newer `pdfcraft-cli`. The agent surface is whatever that release's `mcp` mode provides; `compactSurface` still controls whether `--compact` is passed.
+- **Command-line engine**: point `cliPath` on the `pdfcraft-cli` row at a newer `pdfcraft-cli`. The agent surface is whatever that release's `mcp` mode provides; `compactSurface` still controls whether `--compact` is passed.
 - **The plugin**: `dsh plugin --profile web remove dsh-pdfcraft`, then `dsh plugin --profile web add "$PWD"` from the updated checkout, and restart DSH.
+- **From 0.1.x to 0.2.0**: the single `pdfcraft` row becomes `pdfcraft-web` and `pdfcraft-cli`. Move each override with the [migration table](#migrating-from-the-old-single-row); the old row's patch is warned about and skipped, so nothing breaks, but its values are not applied.
 
 The upstream release pin lives in `src/shared/paths.ts`, which is compiled into both the Host build and the browser bundle; updating it is a plugin change, not a configuration change.
 
@@ -313,13 +355,13 @@ dsh plugin --profile web remove dsh-pdfcraft
 rm -rf "${DSH_HOME:-$HOME/.dsh}/pdfcraft"
 ```
 
-Remove any `pdfcraft` override from `$DSH_HOME/profiles/web/cordis.patch.yml`. The downloaded upstream artifacts live only in the directories above and in your `PATH`; the plugin keeps no other state. PDFs you edited stay in your workspaces.
+Remove any `pdfcraft-web` or `pdfcraft-cli` override from `$DSH_HOME/profiles/web/cordis.patch.yml` (and any old `pdfcraft` override left from before 0.2.0). The downloaded upstream artifacts live only in the directories above and in your `PATH`; the plugin keeps no other state. PDFs you edited stay in your workspaces.
 
 ## Development
 
-The Host and the browser half are TypeScript. `npm run build` clears `dist/`, compiles the Host with `tsc`, and bundles the browser half with `tsdown` into the shell's module-loader envelope, so a clone installs with no toolchain and removed sources cannot leave stale output behind. Edit `src/`, never `dist/`, and commit both.
+The two Host entries and the browser half are TypeScript. `npm run build` clears `dist/`, compiles the Host with `tsc`, and bundles the browser half with `tsdown` into the shell's module-loader envelope, so a clone installs with no toolchain and removed sources cannot leave stale output behind. Edit `src/`, never `dist/`, and commit both.
 
-The Loader row keeps the bare package specifier (`dsh-pdfcraft`). The shell's `dsh-client-modules` reads a package's `dsh.client` declaration only from a bare Loader row, so `exports["."]` points at the Web Component entry and `exports["./web"]` names the same module for direct import. A row named `dsh-pdfcraft/web` would load the Host half but silently contribute no browser bundle.
+The Web row keeps the bare package specifier (`dsh-pdfcraft`). The shell's `dsh-client-modules` reads a package's `dsh.client` declaration only from a bare Loader row, so `exports["."]` points at the Web Component entry and `exports["./web"]` names the same module for direct import. A row named `dsh-pdfcraft/web` would load the Host half but silently contribute no browser bundle. The CLI row uses the `dsh-pdfcraft/cli` subpath because it has no browser half.
 
 ```sh
 npm run build                     # clean dist/, tsc the Host, then tsdown the browser bundle
@@ -343,24 +385,29 @@ src/
   web/panel-opens.ts  Push Channel decisions, /pdfcraft command, pdfcraft_open tool
   web/open-routes.ts  Push Channel SSE adapter
   web/http.ts         shared query parsing and response writers
-  cli/agent-tools.ts  per-agent MCP engine lifecycle (mounted here until the split)
+  cli/index.ts        CLI Component entry: configuration and engine lifecycle wiring
+  cli/agent-tools.ts  per-agent MCP engine lifecycle
+  cli/host.ts         the CLI Component's slice of the host context
+  shared/host.ts      the host context types both component entries share
   shared/paths.ts     public routes, headers, and release pin (compiled into both halves)
   shared/protocol.ts  binding, open-request, and refusal-code types
 dist/
-  web/index.js        committed Host build; what the Loader imports
+  web/index.js        committed Web Component build; what the bare Loader row imports
   web/client.js       committed browser bundle; what the shell loads
+  cli/index.js        committed CLI Component build; what the subpath Loader row imports
 locale/               plugin-listing text in English and Chinese; Panel copy is in src/web/client/copy.ts
-cordis.patch.yml      the bundle patch: one Host row for the Web Component
+cordis.patch.yml      the bundle patch: the two component rows
 test/                 node:test suites, one per seam
 docs/adr/             the architecture decisions
 GLOSSARY.md           the domain vocabulary
 ```
 
-The three ADRs explain why the panel serves an unmodified app, why opening is a Push Channel, and why the engine is mounted per workspace:
+The four ADRs explain why the Panel serves an unmodified app, why opening is a Push Channel, why the engine is mounted per workspace, and why the two components share one installable package:
 
 - [ADR-0001: Serve the unmodified web build and treat the workspace file as the source of truth](docs/adr/0001-unmodified-web-build.md)
 - [ADR-0002: Open the Panel through a hand-built Push Channel](docs/adr/0002-push-channel.md)
 - [ADR-0003: Mount the engine per workspace under workspace-root containment](docs/adr/0003-per-workspace-engine.md)
+- [ADR-0004: Activate the Panel and the engines as two components in one installable package](docs/adr/0004-two-components-one-package.md)
 
 The domain vocabulary these documents use is in [GLOSSARY.md](GLOSSARY.md).
 

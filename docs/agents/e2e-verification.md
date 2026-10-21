@@ -15,6 +15,11 @@ upstream `pdfcraft-cli` plus web build in place (the Panel shows a
 missing-build card naming what is absent otherwise). One workspace PDF is
 enough; generate one with `pdfcraft-cli` or copy a fixture in.
 
+The plugin activates as two Loader rows: `pdfcraft-web` (the Panel and its
+routes, command and open tool) and `pdfcraft-cli` (the per-agent engines). Both
+are active by default. The checklist below uses both; the last section disables
+each in turn.
+
 ## The signals
 
 - **Sidebar**: exactly one `PdfCraft` page; the right column's `+` menu lists it
@@ -53,6 +58,27 @@ enough; generate one with `pdfcraft-cli` or copy a fixture in.
    workspace.
 8. **Compact surface** — the default tool set is small; `tool_search` reaches
    `page_rotate`.
+
+## The two rows
+
+Run these with the rest of the checklist; they prove the split, not the Panel.
+
+9. **Both rows active** — the plugin list shows `pdfcraft-web` and
+   `pdfcraft-cli` active at once, the Panel is a single page, and the agent's
+   tool names still start `mcp__pdfcraft-<hash>__` with the same hash as before
+   the split.
+10. **Web row only** — disable `pdfcraft-cli` in the plugin list (or with a
+    profile patch) and reload. The Panel still opens from `/pdfcraft`, reads and
+    writes back; a new conversation's agent has no PdfCraft tools. Re-enable the
+    row afterwards.
+11. **CLI row only** — disable `pdfcraft-web` and reload. The Panel page and its
+    routes are gone, including `/pdfcraft/status`; the agent's PdfCraft tools
+    still answer under the same workspace-derived namespace. This is expected:
+    the browser half is package-level and registers with the Web row. Re-enable
+    the row afterwards.
+12. **Old row patch** — add a `- id: pdfcraft` entry to the profile patch and
+    reload. The Loader warns `patch: entry "pdfcraft" not found` and skips it;
+    the two rows run unchanged. Remove the entry afterwards.
 
 ## The path you cannot see live
 

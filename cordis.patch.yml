@@ -1,18 +1,24 @@
-# dsh-pdfcraft: one Host row for the Web Component. The browser half is
-# discovered through the package's `dsh.client` declaration; no separate client
-# row is inserted.
+# dsh-pdfcraft: two Host rows, one install. The Web Component serves the Panel;
+# the CLI Component runs one PdfCraft engine per live agent. They share no
+# runtime state and each row validates only its own configuration fields.
 #
-# The row keeps the bare package specifier. `@deepseek-ai/dsh-client-modules`
+# The Web row keeps the bare package specifier. `@deepseek-ai/dsh-client-modules`
 # reads `dsh.client` only from a Loader row whose name is a bare package name,
 # so `exports["."]` points at the Web Component entry; the `./web` subpath is
 # the same module for direct import. A subpath row would load the host half but
-# silently contribute no browser bundle.
+# silently contribute no browser bundle. The CLI row may use the `./cli`
+# subpath because it has no browser half.
 #
 # `webBuildDir` is where the person extracted the PdfCraft web release the
 # Panel names when it reports a missing build. The default keeps the build
 # under the Harness home; a per-profile override can point anywhere.
+#
+# The CLI row ships with its defaults: `pdfcraft-cli` on PATH, each
+# conversation's own workspace as the Agent MCP Root, and the compact surface.
 - insert:
-    - id: pdfcraft
+    - id: pdfcraft-web
       name: dsh-pdfcraft
       config:
         webBuildDir: !!js dshHomePath('pdfcraft', 'web')
+    - id: pdfcraft-cli
+      name: dsh-pdfcraft/cli

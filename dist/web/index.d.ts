@@ -9,9 +9,9 @@
  * browser half holds the conversation's view open, and the controller opens
  * the page when one arrives.
  *
- * The per-agent engine is still mounted here for one step, so the package
- * stays one entry and one Loader row while the split proceeds. The CLI
- * Component takes it over next; the Panel does not depend on it.
+ * The per-agent engines are the CLI Component's job. This component serves
+ * the Panel only, so disabling that row leaves the Panel working and disabling
+ * this row leaves the engines working.
  *
  * The Push Channel is how the harness half asks the browser to open the Panel.
  * A request binds one Workspace Document per conversation, is delivered once
@@ -20,7 +20,7 @@
  */
 import Schema from '@deepseek-ai/schemastery';
 import type { HostContext } from './host.js';
-/** Plugin name used in fiber diagnostics. */
+/** Plugin name used in fiber diagnostics; the browser half publishes the same id. */
 export declare const name = "dsh-pdfcraft";
 /**
  * The page is a Web surface; a Host without the Web server has nothing to serve.
@@ -36,23 +36,18 @@ export declare const inject: string[];
  */
 export declare const Config: Schema<Schemastery.ObjectS<NoInfer<{
     webBuildDir: Schema<string, string, "defined">;
-    cliPath: Schema<string, string, "defined">;
-    staticRoot: Schema<string, string, "defined">;
-    compactSurface: Schema<boolean, boolean, "defined">;
     openTool: Schema<boolean, boolean, "defined">;
     maxDocumentBytes: Schema<number, number, "defined">;
 }>>, Schemastery.ObjectT<NoInfer<{
     webBuildDir: Schema<string, string, "defined">;
-    cliPath: Schema<string, string, "defined">;
-    staticRoot: Schema<string, string, "defined">;
-    compactSurface: Schema<boolean, boolean, "defined">;
     openTool: Schema<boolean, boolean, "defined">;
     maxDocumentBytes: Schema<number, number, "defined">;
 }>>, "plain">;
 /** The row's configuration after validation. */
 export type WebConfig = ReturnType<typeof Config>;
 /**
- * Register the Panel's HTTP surface and, for now, the per-conversation agent engines.
+ * Register the Panel's HTTP surface and publish the two services its command,
+ * tool and browser half share.
  * @param ctx - Host context carrying the Web server.
  * @param config - resolved plugin configuration.
  */

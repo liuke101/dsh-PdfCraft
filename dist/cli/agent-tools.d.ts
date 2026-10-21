@@ -1,4 +1,4 @@
-import type { HostContext } from '../web/host.js';
+import type { HostContext } from './host.js';
 /** The command that starts the upstream engine when configuration names no other. */
 export declare const DEFAULT_CLI = "pdfcraft-cli";
 /** The settings the engines run with, resolved from the row's configuration. */
