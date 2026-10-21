@@ -304,7 +304,7 @@ These are properties of this design, not bugs to report:
 - **Command-line engine**: point `cliPath` at a newer `pdfcraft-cli`. The agent surface is whatever that release's `mcp` mode provides; `compactSurface` still controls whether `--compact` is passed.
 - **The plugin**: `dsh plugin --profile web remove dsh-pdfcraft`, then `dsh plugin --profile web add "$PWD"` from the updated checkout, and restart DSH.
 
-The upstream release pin lives in `lib/paths.js` and is mirrored in `client.js`; updating it is a plugin change, not a configuration change.
+The upstream release pin lives in `src/shared/paths.ts` and is mirrored in `client.js`; updating it is a plugin change, not a configuration change.
 
 ## Uninstall
 
