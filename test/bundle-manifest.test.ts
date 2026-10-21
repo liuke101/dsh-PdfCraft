@@ -60,6 +60,18 @@ test('the package carries both component entries, a browser half, and display re
   }
 })
 
+test('both component specifiers resolve the shared package locale', () => {
+  for (const component of ['dsh-pdfcraft', 'dsh-pdfcraft/cli']) {
+    for (const language of ['en', 'zh']) {
+      assert.equal(
+        import.meta.resolve(`${component}/locale/${language}.json`),
+        new URL(`../locale/${language}.json`, import.meta.url).href,
+        `${component} resolves the shared ${language} locale`,
+      )
+    }
+  }
+})
+
 test('no old JavaScript implementation remains', async () => {
   for (const file of ['index.js', 'client.js']) {
     await assert.rejects(access(new URL(file, root)), `${file} is gone`)

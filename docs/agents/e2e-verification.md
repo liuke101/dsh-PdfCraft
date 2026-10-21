@@ -64,9 +64,9 @@ each in turn.
 ## The two rows
 
 Run these with the rest of the checklist; they prove the split, not the Panel.
-Rows 9–11 exercise engine mount and withdrawal; the idle release and disposal
-decisions are driven by `test/agent-tools.test.ts`, so this checklist does not
-wait out the idle timer.
+Rows 9–11 exercise engine mount and withdrawal; row 12 checks the stale patch.
+The idle release and disposal decisions are driven by `test/agent-tools.test.ts`,
+so this checklist does not wait out the idle timer.
 
 9. **Both rows active** — the plugin list shows `pdfcraft-web` and
    `pdfcraft-cli` active at once, the Panel is a single page, and the agent's
