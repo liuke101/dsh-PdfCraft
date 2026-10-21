@@ -1,5 +1,7 @@
 # 1. Serve the unmodified PdfCraft web build and treat the workspace file as the source of truth
 
+> **Update 2026-10-21 (#14):** the plugin is now TypeScript and the Panel is the Web Component. Where this record says `client.js`, read the browser half at `src/web/client/`; the route and release pin is still the one module named below, now compiled into both halves. The decision is unchanged.
+
 - **Status:** Accepted
 - **Date:** 2026-10-20
 - **Issues:** #1, #6
@@ -17,7 +19,7 @@ Two constraints follow:
 
 ## Decision
 
-- **Pin the upstream web build.** The Embedded App is `pdfcraft-web-0.9.0.zip` from [PdfCraft v0.9.0](https://github.com/storytold/pdfcraft/releases/tag/v0.9.0). The person downloads and extracts it; the plugin never downloads it, never caches it, and never ships a copy in this repository. The pin lives in `src/shared/paths.ts` and is mirrored in `client.js`.
+- **Pin the upstream web build.** The Embedded App is `pdfcraft-web-0.9.0.zip` from [PdfCraft v0.9.0](https://github.com/storytold/pdfcraft/releases/tag/v0.9.0). The person downloads and extracts it; the plugin never downloads it, never caches it, and never ships a copy in this repository. The pin lives in `src/shared/paths.ts`, which the build compiles into both the host entry and the browser bundle.
 - **Serve it unmodified from the profile's own origin.** The asset route serves the extracted directory byte-for-byte under `/pdfcraft/`. It sets `application/wasm` for `.wasm`, `text/javascript` for `.js`, immutable caching for JS/WASM/CSS/font files, and `no-cache` for `index.html`. It rewrites no file and injects no script.
 - **The Panel is an iframe of that directory.** A bound conversation frames `/pdfcraft/?host=parent`; Standalone Mode frames `/pdfcraft/` with no bridge. The plugin's own chrome is limited to the states where it must speak: waiting for the build, a missing build, Standalone Mode, a refused read, and the revision conflict.
 - **The workspace file is the single source of truth.** A Workspace Document is read through the host's `/pdfcraft/document` route, which resolves the requested path under the conversation's `SessionHeader.cwd` with `realpath`, so a symlink inside the workspace cannot escape it. The bytes are posted into the frame with `pdfcraft:open`. The frame is rebuilt when the bound Workspace Document changes (its React key includes the path and a reload epoch), so a new Workspace Document cannot leave the old one on screen.

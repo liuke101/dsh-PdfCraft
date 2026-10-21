@@ -16,7 +16,7 @@ Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents
 
 ### End-to-end verification
 
-A change to `client.js`, the document routes, or the open tool is verified in the live interface, not just by the suite. Follow `docs/agents/e2e-verification.md`.
+A change to the browser half (`src/web/client/`), the workspace-document routes (`src/web/`), or the open tool is verified in the live interface, not just by the suite. Follow `docs/agents/e2e-verification.md`.
 
 ### Commit Conventions
 

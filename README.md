@@ -304,7 +304,7 @@ These are properties of this design, not bugs to report:
 - **Command-line engine**: point `cliPath` at a newer `pdfcraft-cli`. The agent surface is whatever that release's `mcp` mode provides; `compactSurface` still controls whether `--compact` is passed.
 - **The plugin**: `dsh plugin --profile web remove dsh-pdfcraft`, then `dsh plugin --profile web add "$PWD"` from the updated checkout, and restart DSH.
 
-The upstream release pin lives in `src/shared/paths.ts` and is mirrored in `client.js`; updating it is a plugin change, not a configuration change.
+The upstream release pin lives in `src/shared/paths.ts`, which is compiled into both the Host build and the browser bundle; updating it is a plugin change, not a configuration change.
 
 ## Uninstall
 
@@ -317,37 +317,40 @@ Remove any `pdfcraft` override from `$DSH_HOME/profiles/web/cordis.patch.yml`. T
 
 ## Development
 
-The host's shared constants are TypeScript; the rest of the Host is still plain ESM, and the Web client is a self-contained classic script. `npm run build` clears `dist/` and compiles `src/` into it, so a clone installs with no toolchain and removed sources cannot leave stale output behind. Edit `src/`, never `dist/`, and commit both.
+The Host and the browser half are TypeScript. `npm run build` clears `dist/`, compiles the Host with `tsc`, and bundles the browser half with `tsdown` into the shell's module-loader envelope, so a clone installs with no toolchain and removed sources cannot leave stale output behind. Edit `src/`, never `dist/`, and commit both.
+
+The Loader row keeps the bare package specifier (`dsh-pdfcraft`). The shell's `dsh-client-modules` reads a package's `dsh.client` declaration only from a bare Loader row, so `exports["."]` points at the Web Component entry and `exports["./web"]` names the same module for direct import. A row named `dsh-pdfcraft/web` would load the Host half but silently contribute no browser bundle.
 
 ```sh
-npm run build                     # clean dist/, then tsc: compile src/ into it
+npm run build                     # clean dist/, tsc the Host, then tsdown the browser bundle
 npm test                          # the whole suite, node:test
-npm run typecheck                 # tsc --noEmit over src/ and test/
-npm run lint                      # eslint over the JavaScript: no-undef and no-unused-vars
-node --test test/document-routes.test.js   # one suite
+npm run typecheck                 # tsc --noEmit for the Host and for the browser half
+node --test test/document-routes.test.ts   # one suite
 ```
 
-The tests use only Node's built-in test runner and assertion library. Node 24 strips types from the test files and from the shared module, so the suite runs against `src/` directly with no transpile step. The TypeScript compiler and `@types/node` are pinned exactly with the other development dependencies. `.github/workflows/check.yml` builds, fails when the committed `dist/` is stale, lints, type-checks, and runs the suite on every push and pull request.
+The tests use only Node's built-in test runner and assertion library. Node 24 strips types from the test files and the TypeScript sources, so the suite runs against `src/` directly with no transpile step. The browser bundle gets one shape test through a fake `__ModuleLoader__`; the Host Bridge, Push Channel, and refusal decisions are pure functions in `src/web/client/protocol.ts` and are driven directly. The TypeScript compiler, `tsdown`, and `@types/node` are pinned exactly with the other development dependencies. `.github/workflows/check.yml` builds, fails when the committed `dist/` is stale, type-checks both configurations, and runs the suite on every push and pull request.
 
-The browser half has no test seam: a change to `client.js`, the document routes, or the open tool is verified by hand. Follow [docs/agents/e2e-verification.md](docs/agents/e2e-verification.md).
+The glue that turns a save into a write-back is verified by hand. Follow [docs/agents/e2e-verification.md](docs/agents/e2e-verification.md).
 
 ```text
-index.js              Host half: configuration, HTTP routes, route wiring
-client.js             Web half: sidebar registration, Host Bridge, Push Channel client
 src/
-  shared/paths.ts     public routes, release pin, asset constants (source)
+  web/index.ts        Web Component entry: configuration, HTTP routes, route wiring
+  web/client/         browser half: page registration, Host Bridge, Push Channel stream
+  web/client/protocol.ts  pure bridge, push, and refusal decisions
+  web/web-build.ts    static asset and readiness routes
+  web/workspace-document.ts  containment, size limit, Revision Guard, binding registry
+  web/document-routes.ts  Workspace Document HTTP surface
+  web/panel-opens.ts  Push Channel decisions, /pdfcraft command, pdfcraft_open tool
+  web/open-routes.ts  Push Channel SSE adapter
+  web/http.ts         shared query parsing and response writers
+  cli/agent-tools.ts  per-agent MCP engine lifecycle (mounted here until the split)
+  shared/paths.ts     public routes, headers, and release pin (compiled into both halves)
+  shared/protocol.ts  binding, open-request, and refusal-code types
 dist/
-  shared/paths.js     committed build output; what the Host imports
-lib/
-  web-build.js        static asset and readiness routes
-  workspace-document.js  containment, size limit, Revision Guard, binding registry
-  document-routes.js  Workspace Document HTTP surface
-  panel-opens.js      Push Channel decisions, /pdfcraft command, pdfcraft_open tool
-  open-routes.js      Push Channel SSE adapter
-  http.js             shared query parsing and response writers
-  agent-tools.js      per-agent MCP engine lifecycle
-locale/               plugin-listing text in English and Chinese; Panel copy is in client.js
-cordis.patch.yml      the bundle patch: one Host row
+  web/index.js        committed Host build; what the Loader imports
+  web/client.js       committed browser bundle; what the shell loads
+locale/               plugin-listing text in English and Chinese; Panel copy is in src/web/client/copy.ts
+cordis.patch.yml      the bundle patch: one Host row for the Web Component
 test/                 node:test suites, one per seam
 docs/adr/             the architecture decisions
 GLOSSARY.md           the domain vocabulary

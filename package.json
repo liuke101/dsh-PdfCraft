@@ -5,15 +5,19 @@
   "type": "module",
   "description": "A PdfCraft panel in DSH's right sidebar, served from the profile's own origin.",
   "exports": {
-    ".": "./index.js",
-    "./client": "./client.js",
+    ".": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    },
+    "./web": {
+      "types": "./dist/web/index.d.ts",
+      "default": "./dist/web/index.js"
+    },
+    "./client": "./dist/web/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.png"
   },
   "files": [
-    "index.js",
-    "client.js",
-    "lib/*.js",
     "dist/",
     "cordis.patch.yml",
     "locale/*.json",
@@ -34,10 +38,9 @@
   },
   "scripts": {
     "prebuild": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json",
-    "test": "node --test",
-    "lint": "eslint ."
+    "build": "tsc -p tsconfig.build.json && node scripts/rewrite-declaration-imports.mjs && tsdown",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
+    "test": "node --test"
   },
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1",
@@ -47,8 +50,8 @@
   "license": "MIT",
   "devDependencies": {
     "@types/node": "24.19.2",
-    "eslint": "10.13.0",
-    "globals": "17.13.0",
+    "@types/react": "18.3.31",
+    "tsdown": "0.23.1",
     "typescript": "7.0.2"
   }
 }

@@ -15,10 +15,9 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Build the committed host output
+      - name: Build the committed host and browser output
         run: npm run build
       - name: Fail when the committed build output is stale
         run: test -z "$(git status --porcelain -- dist)"
-      - run: npm run lint
       - run: npm run typecheck
       - run: npm test

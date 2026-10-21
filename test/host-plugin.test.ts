@@ -4,45 +4,37 @@ import { mkdtemp, mkdir, writeFile, rm, symlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply, Config } from '../index.js'
+import { apply, Config } from '../src/web/index.ts'
+import type { HostContext, WebServerRoute } from '../src/web/host.ts'
+import type { RouteRequest, RouteResponse } from '../src/web/http.ts'
 
 /**
  * A recording Host context: the only facilities this plugin may use are the
  * Web server's route table and the effect scope that owns the registrations.
  */
 function createContext() {
-  const routes = []
-  const effects = []
-  const removals = []
-  const listeners = new Map()
+  const routes: WebServerRoute[] = []
+  const effects: Array<() => unknown> = []
+  const removals: string[] = []
 
-  const ctx = {
+  const context = {
     webServer: {
-      register(route) {
+      register(route: WebServerRoute) {
         routes.push(route)
         return () => removals.push(route.path)
       },
     },
-    effect(body) {
+    effect(body: () => (() => unknown) | undefined) {
       const dispose = body()
-      effects.push(dispose)
+      effects.push(dispose ?? (() => {}))
       return dispose
-    },
-    on(event, listener) {
-      const registered = listeners.get(event) ?? []
-      registered.push(listener)
-      listeners.set(event, registered)
-      return () => {}
-    },
-    logger: {
-      warn() {},
     },
   }
 
   return {
-    ctx,
+    ctx: context as unknown as HostContext,
     routes,
-    route(kind, path) {
+    route(kind: 'exact' | 'prefix', path: string): WebServerRoute {
       const route = routes.find((candidate) => candidate.kind === kind && candidate.path === path)
       assert.ok(route, `expected a ${kind} route at ${path}`)
       return route
@@ -55,7 +47,7 @@ function createContext() {
 }
 
 /** A node:http-shaped request the registered Web route handler receives. */
-function request(url, method = 'GET') {
+function request(url: string, method = 'GET'): RouteRequest {
   return {
     url,
     method,
@@ -65,9 +57,16 @@ function request(url, method = 'GET') {
 }
 
 /** A node:http-shaped response that records what the adapter wrote. */
-function response() {
-  const chunks = []
-  return {
+interface RecordedResponse extends RouteResponse {
+  statusCode: number
+  headers: Record<string, string>
+  readonly body: string
+  readonly bytes: Buffer
+}
+
+function response(): RecordedResponse {
+  const chunks: Buffer[] = []
+  const recorded: RecordedResponse = {
     statusCode: 200,
     headers: {},
     get body() {
@@ -76,22 +75,29 @@ function response() {
     get bytes() {
       return Buffer.concat(chunks)
     },
-    writeHead(status, headers = {}) {
-      this.statusCode = status
-      Object.assign(this.headers, headers)
+    writeHead(status: number, headers: Record<string, string> = {}) {
+      recorded.statusCode = status
+      Object.assign(recorded.headers, headers)
     },
-    write(chunk) {
+    write(chunk: string | Uint8Array) {
       chunks.push(Buffer.from(chunk))
       return true
     },
-    end(chunk) {
+    end(chunk?: string | Uint8Array) {
       if (chunk !== undefined) chunks.push(Buffer.from(chunk))
     },
   }
+  return recorded
 }
 
 /** Drive one registered route the way the Web server would. */
-async function call(harness, kind, path, url, method = 'GET') {
+async function call(
+  harness: ReturnType<typeof createContext>,
+  kind: 'exact' | 'prefix',
+  path: string,
+  url: string,
+  method = 'GET',
+): Promise<RecordedResponse> {
   const res = response()
   await harness.route(kind, path).handler(request(url, method), res)
   return res
@@ -106,7 +112,10 @@ async function workspace() {
   }
 }
 
-async function installWebBuild(directory, { index = '<!doctype html><title>PdfCraft</title>' } = {}) {
+async function installWebBuild(
+  directory: string,
+  { index = '<!doctype html><title>PdfCraft</title>' }: { index?: string } = {},
+): Promise<void> {
   await mkdir(directory, { recursive: true })
   await writeFile(join(directory, 'index.html'), index)
   await writeFile(join(directory, 'pdfcraft-web-abc123.js'), 'export default 1\n')
@@ -270,7 +279,7 @@ test('reports a missing web build with the file the person has to fetch', async 
 
     const res = await call(harness, 'exact', '/pdfcraft/status', '/pdfcraft/status')
     assert.equal(res.statusCode, 200)
-    assert.match(res.headers['content-type'], /^application\/json/)
+    assert.match(res.headers['content-type'] ?? '', /^application\/json/)
 
     const status = JSON.parse(res.body)
     assert.equal(status.ready, false)

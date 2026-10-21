@@ -1,5 +1,7 @@
 # 2. Open the Panel through a hand-built Push Channel
 
+> **Update 2026-10-21 (#14):** the plugin is now TypeScript. The files named below moved to `src/web/panel-opens.ts`, `src/web/open-routes.ts`, and `src/web/client/index.ts`; the route and page-kind strings are now imported from `src/shared/paths.ts` and inlined into the browser bundle rather than mirrored. The decision is unchanged.
+
 - **Status:** Accepted
 - **Date:** 2026-10-20
 - **Issues:** #1, #6
@@ -21,9 +23,9 @@ The requirements are narrow and specific:
 
 ## Decision
 
-- **A per-conversation channel with consume-on-send semantics.** `lib/panel-opens.js` owns the policy. `open(sessionId, path)` binds or clears the conversation's Workspace Document first, then creates an immutable `OpenRequest` (`id`, `sessionId`, `document`). It deletes any previous pending request for that conversation, delivers to one attached stream if there is one, and otherwise stores the request as pending. `attach(sessionId, send)` registers a browser stream and flushes one waiting request. `setEnabled(false)` drops everything pending; `dispose()` closes the queues and detaches every stream.
-- **The stream is Server-Sent Events.** `GET /pdfcraft/pushes?session=<id>` is a one-way SSE stream. It writes a `: connected` comment, then `data: {"type":"open",...}` frames. The policy object has no HTTP knowledge; `lib/open-routes.js` is only the adapter, and it closes every stream when the plugin unloads. SSE was chosen because the direction is one-way, `EventSource` reconnects on its own, and no extra server or WebSocket layer is needed.
-- **The browser holds a stream for the conversation on screen.** `client.js` watches the sidebar controller's mounted-session snapshot and opens one `EventSource` for that conversation. When a frame for that conversation arrives, it publishes a revision to the Panel's open feed and calls the controller's `openTab` for the single PdfCraft page. If the page kind is still being registered during activation, one short retry covers the race. A request that arrives while another conversation is mounted stays on the host until that conversation's stream attaches.
+- **A per-conversation channel with consume-on-send semantics.** `src/web/panel-opens.ts` owns the policy. `open(sessionId, path)` binds or clears the conversation's Workspace Document first, then creates an immutable `OpenRequest` (`id`, `sessionId`, `document`). It deletes any previous pending request for that conversation, delivers to one attached stream if there is one, and otherwise stores the request as pending. `attach(sessionId, send)` registers a browser stream and flushes one waiting request. `setEnabled(false)` drops everything pending; `dispose()` closes the queues and detaches every stream.
+- **The stream is Server-Sent Events.** `GET /pdfcraft/pushes?session=<id>` is a one-way SSE stream. It writes a `: connected` comment, then `data: {"type":"open",...}` frames. The policy object has no HTTP knowledge; `src/web/open-routes.ts` is only the adapter, and it closes every stream when the plugin unloads. SSE was chosen because the direction is one-way, `EventSource` reconnects on its own, and no extra server or WebSocket layer is needed.
+- **The browser holds a stream for the conversation on screen.** `src/web/client/index.ts` watches the sidebar controller's mounted-session snapshot and opens one `EventSource` for that conversation. When a frame for that conversation arrives, it publishes a revision to the Panel's open feed and calls the controller's `openTab` for the single PdfCraft page. If the page kind is still being registered during activation, one short retry covers the race. A request that arrives while another conversation is mounted stays on the host until that conversation's stream attaches.
 - **Two entries, one policy.** The person's `/pdfcraft [path]` command and the model's `pdfcraft_open` tool both call the same `open` function and return whether the request was delivered immediately. The command never submits a model message. Omitting the path clears the binding and opens Standalone Mode instead of failing.
 - **One switch controls both.** `openTool` defaults to `true`. When it is `false`, neither entry is registered and the channel drains what is still waiting. An already-open Panel is left alone; the switch governs opening, not the Panel's existence.
 - **One page identity.** Both registration paths use the same `pdfcraft` page kind, and the better-sidebar path declares a single-instance page. This is also what keeps a later open from adding a second entry.
@@ -37,7 +39,7 @@ The requirements are narrow and specific:
 - Delivery is at-most-once from the browser's point of view. A dropped stream can lose a request that was already consumed; the alternative, replaying on reconnect, would reopen Panels the person closed, which is worse.
 - Opening always expands the right column, because the controller's open call does. DSH offers no quiet open; this is a known limitation rather than something the channel can work around.
 - The design is specific to open requests. It is not a general notification bus, and it deliberately carries no arbitrary payloads or commands into the browser.
-- Both halves need the same route and page-kind strings. They are mirrored rather than imported because the browser half is a self-contained classic script; tests pin the mirrors.
+- Both halves need the same route and page-kind strings. They are imported from `src/shared/paths.ts`, which the browser build inlines, so the two halves cannot drift.
 
 ## Alternatives considered
 

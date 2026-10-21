@@ -4,7 +4,10 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply } from '../index.js'
+import { apply } from '../src/web/index.ts'
+import type { HostContext, SessionStore, WebServerRoute } from '../src/web/host.ts'
+import type { RouteRequest, RouteResponse } from '../src/web/http.ts'
+import type { BindingRegistry } from '../src/web/workspace-document.ts'
 
 /** Public addresses of the Workspace Document surface. */
 const BINDING_PATH = '/pdfcraft/binding'
@@ -28,23 +31,23 @@ const TAMPERED_HASH = '72f1682477c37e757eb975fa25561a652a313eaddd484a643e6ddda8f
  * workspace through, and the service registry that carries the document
  * bindings the Push Channel will drive.
  */
-function createContext({ sessions }) {
-  const routes = []
-  const effects = []
-  const removals = []
-  const services = new Map()
+function createContext({ sessions }: { sessions: SessionStore }) {
+  const routes: WebServerRoute[] = []
+  const effects: Array<() => unknown> = []
+  const removals: string[] = []
+  const services = new Map<string, unknown>()
 
-  const ctx = {
+  const context = {
     webServer: {
-      register(route) {
+      register(route: WebServerRoute) {
         routes.push(route)
         return () => removals.push(route.path)
       },
     },
     sessions,
-    effect(body) {
+    effect(body: () => (() => unknown) | undefined) {
       const dispose = body()
-      effects.push(dispose)
+      effects.push(dispose ?? (() => {}))
       return dispose
     },
     // The agent engines listen on the Agent lifecycle; these routes do not
@@ -55,26 +58,26 @@ function createContext({ sessions }) {
     logger: {
       warn() {},
     },
-    get(name) {
+    get(name: string) {
       return services.get(name)
     },
-    provide(name, value) {
+    provide(name: string, value: unknown) {
       services.set(name, value)
       return () => services.delete(name)
     },
   }
 
   return {
-    ctx,
+    ctx: context as unknown as HostContext,
     routes,
     services,
-    route(kind, path) {
+    route(kind: 'exact' | 'prefix', path: string): WebServerRoute {
       const route = routes.find((candidate) => candidate.kind === kind && candidate.path === path)
       assert.ok(route, `expected a ${kind} route at ${path}`)
       return route
     },
-    bindings() {
-      const bindings = services.get('pdfcraftBindings')
+    bindings(): BindingRegistry {
+      const bindings = services.get('pdfcraftBindings') as BindingRegistry | undefined
       assert.ok(bindings, 'the plugin exposes the per-conversation binding registry to the Push Channel')
       return bindings
     },
@@ -86,7 +89,10 @@ function createContext({ sessions }) {
 }
 
 /** A node:http-shaped request the registered Web route handler receives. */
-function request(url, { method = 'GET', headers = {}, body } = {}) {
+function request(
+  url: string,
+  { method = 'GET', headers = {}, body }: { method?: string; headers?: Record<string, string>; body?: Buffer } = {},
+): RouteRequest {
   return {
     url,
     method,
@@ -98,9 +104,16 @@ function request(url, { method = 'GET', headers = {}, body } = {}) {
 }
 
 /** A node:http-shaped response that records what the adapter wrote. */
-function response() {
-  const chunks = []
-  return {
+interface RecordedResponse extends RouteResponse {
+  statusCode: number
+  headers: Record<string, string>
+  readonly body: string
+  readonly bytes: Buffer
+}
+
+function response(): RecordedResponse {
+  const chunks: Buffer[] = []
+  const recorded: RecordedResponse = {
     statusCode: 200,
     headers: {},
     get body() {
@@ -109,33 +122,45 @@ function response() {
     get bytes() {
       return Buffer.concat(chunks)
     },
-    writeHead(status, headers = {}) {
-      this.statusCode = status
-      Object.assign(this.headers, headers)
+    writeHead(status: number, headers: Record<string, string> = {}) {
+      recorded.statusCode = status
+      Object.assign(recorded.headers, headers)
     },
-    write(chunk) {
+    write(chunk: string | Uint8Array) {
       chunks.push(Buffer.from(chunk))
       return true
     },
-    end(chunk) {
+    end(chunk?: string | Uint8Array) {
       if (chunk !== undefined) chunks.push(Buffer.from(chunk))
     },
   }
+  return recorded
 }
 
 /** Drive one registered route the way the Web server would. */
-async function call(harness, path, options = {}) {
+async function call(
+  harness: ReturnType<typeof createContext>,
+  path: string,
+  options: { url?: string; method?: string; headers?: Record<string, string>; body?: Buffer } = {},
+): Promise<RecordedResponse> {
   const res = response()
   await harness.route('exact', path).handler(request(options.url ?? path, options), res)
   return res
 }
 
 /** The JSON body of a response, for the cases that answer JSON. */
-function json(res) {
+function json(res: RecordedResponse): any {
   return JSON.parse(res.body)
 }
 
-function documentUrl({ session = SESSION, path, revision, force } = {}) {
+function documentUrl(
+  { session = SESSION, path, revision, force }: {
+    session?: string
+    path?: string
+    revision?: string
+    force?: boolean
+  } = {},
+): string {
   const params = new URLSearchParams()
   if (session !== undefined) params.set('session', session)
   if (path !== undefined) params.set('path', path)
@@ -144,7 +169,7 @@ function documentUrl({ session = SESSION, path, revision, force } = {}) {
   return `${DOCUMENT_PATH}?${params.toString()}`
 }
 
-function bindingUrl(session = SESSION) {
+function bindingUrl(session = SESSION): string {
   return `${BINDING_PATH}?${new URLSearchParams({ session }).toString()}`
 }
 
@@ -157,9 +182,9 @@ async function workspace() {
   return { area, root, outside, cleanup: () => rm(area, { recursive: true, force: true }) }
 }
 
-function sessionStore(root) {
+function sessionStore(root: string): SessionStore {
   return {
-    get(id) {
+    get(id: string) {
       if (id === SESSION) return { header: { id, cwd: root } }
       if (id === COLD_SESSION) return { header: { id } }
       return undefined
@@ -168,18 +193,28 @@ function sessionStore(root) {
 }
 
 /** Apply the plugin with the document routes and their size limit. */
-function mount(harness, { maxDocumentBytes } = {}) {
+function mount(
+  harness: ReturnType<typeof createContext>,
+  { maxDocumentBytes }: { maxDocumentBytes?: number } = {},
+): void {
   apply(harness.ctx, {
     webBuildDir: join(tmpdir(), 'dsh-pdfcraft-no-build'),
     ...(maxDocumentBytes === undefined ? {} : { maxDocumentBytes }),
   })
 }
 
-async function readDocument(harness, options) {
+async function readDocument(
+  harness: ReturnType<typeof createContext>,
+  options: Parameters<typeof documentUrl>[0],
+): Promise<RecordedResponse> {
   return call(harness, DOCUMENT_PATH, { url: documentUrl(options) })
 }
 
-async function writeDocument(harness, options, body) {
+async function writeDocument(
+  harness: ReturnType<typeof createContext>,
+  options: Parameters<typeof documentUrl>[0],
+  body: Buffer,
+): Promise<RecordedResponse> {
   return call(harness, DOCUMENT_PATH, {
     url: documentUrl(options),
     method: 'POST',
@@ -349,7 +384,7 @@ test('a document over the configured size limit is refused with a message naming
 
     const refusedWrite = await writeDocument(harness, {
       path: 'small.pdf',
-      revision: loaded.headers['x-pdfcraft-revision'],
+      revision: loaded.headers['x-pdfcraft-revision'] ?? '',
     }, large)
     assert.equal(refusedWrite.statusCode, 413)
     const writeBody = json(refusedWrite)
@@ -505,7 +540,7 @@ test('a conversation holds exactly one bound document, replaced in place by a la
     assert.deepEqual(first, { path: 'first.pdf', name: 'first.pdf' })
 
     bindings.bind(SESSION, 'docs/second.pdf')
-    assert.equal(bindings.get(SESSION).path, 'docs/second.pdf')
+    assert.equal(bindings.get(SESSION)?.path, 'docs/second.pdf')
     assert.equal(bindings.entries().length, 1)
 
     bindings.clear(SESSION)

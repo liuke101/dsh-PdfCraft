@@ -4,9 +4,32 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply } from '../index.js'
+import { apply } from '../src/web/index.ts'
+import type { AgentLike, HostContext } from '../src/web/host.ts'
 
 const CLI = '/opt/pdfcraft/pdfcraft-cli'
+
+/** The child plugin the fake Agent scope records. */
+interface MountedBridge {
+  readonly name?: string
+  readonly inject?: readonly string[]
+}
+
+/** The bridge configuration the engine passes to the MCP client. */
+interface MountedConfig {
+  readonly serverName: string
+  readonly transport: string
+  readonly command: string
+  readonly args: string[]
+  readonly cwd: string
+}
+
+/** One recorded child-plugin mount. */
+interface Mount {
+  readonly plugin: MountedBridge
+  readonly config: MountedConfig
+  readonly fiber: { disposed: boolean; dispose(): void }
+}
 
 /**
  * A recording Host context. Besides the Web server, this plugin uses three
@@ -15,47 +38,47 @@ const CLI = '/opt/pdfcraft/pdfcraft-cli'
  * fake agent below records mounts the way the Agent scope would.
  */
 function createHostContext() {
-  const routes = []
-  const effects = []
-  const listeners = new Map()
-  const warnings = []
+  const routes: Array<{ kind: string; path: string; handler: unknown }> = []
+  const effects: Array<() => unknown> = []
+  const listeners = new Map<string, Array<(payload: unknown) => unknown>>()
+  const warnings: string[] = []
 
-  const remove = (event, listener) => {
+  const remove = (event: string, listener: (payload: unknown) => unknown): void => {
     const list = listeners.get(event) ?? []
     const index = list.indexOf(listener)
     if (index >= 0) list.splice(index, 1)
   }
 
-  const ctx = {
+  const context = {
     webServer: {
-      register(route) {
+      register(route: { kind: string; path: string; handler: unknown }) {
         routes.push(route)
         return () => {}
       },
     },
-    effect(body) {
+    effect(body: () => (() => unknown) | undefined) {
       const dispose = body()
-      effects.push(dispose)
+      effects.push(dispose ?? (() => {}))
       return dispose
     },
-    on(event, listener) {
+    on(event: string, listener: (payload: unknown) => unknown) {
       const list = listeners.get(event) ?? []
       list.push(listener)
       listeners.set(event, list)
       return () => remove(event, listener)
     },
     logger: {
-      warn(...parts) {
+      warn(...parts: unknown[]) {
         warnings.push(parts.join(' '))
       },
     },
   }
 
   return {
-    ctx,
+    ctx: context as unknown as HostContext,
     routes,
     warnings,
-    async emit(event, payload) {
+    async emit(event: string, payload: unknown) {
       for (const listener of [...(listeners.get(event) ?? [])]) await listener(payload)
     },
     /** Plugin unload: withdraw effects and listeners the way the fiber would. */
@@ -66,15 +89,23 @@ function createHostContext() {
   }
 }
 
+interface FakeAgent {
+  readonly agent: AgentLike
+  readonly mounts: Mount[]
+  /** Events that stay on the agent's own scoped context, as a subagent's do. */
+  emit(event: string, payload: unknown): Promise<void>
+  listenerCount(event: string): number
+}
+
 /**
  * A fake live Agent: its scoped context records the child plugin it is asked
  * to mount and exposes the returned fiber's disposal.
  */
-function createAgent({ id, cwd }) {
-  const mounts = []
-  const listeners = new Map()
+function createAgent({ id, cwd }: { id: string; cwd?: string }): FakeAgent {
+  const mounts: Mount[] = []
+  const listeners = new Map<string, Array<(payload: unknown) => unknown>>()
 
-  const remove = (event, listener) => {
+  const remove = (event: string, listener: (payload: unknown) => unknown): void => {
     const list = listeners.get(event) ?? []
     const index = list.indexOf(listener)
     if (index >= 0) list.splice(index, 1)
@@ -84,17 +115,21 @@ function createAgent({ id, cwd }) {
     id,
     session: { header: cwd === undefined ? {} : { cwd } },
     ctx: {
-      plugin(plugin, config) {
+      plugin(plugin: unknown, config?: unknown) {
         const fiber = {
           disposed: false,
           dispose() {
             this.disposed = true
           },
         }
-        mounts.push({ plugin, config, fiber })
+        mounts.push({
+          plugin: plugin as MountedBridge,
+          config: config as MountedConfig,
+          fiber,
+        })
         return fiber
       },
-      on(event, listener) {
+      on(event: string, listener: (payload: unknown) => unknown) {
         const list = listeners.get(event) ?? []
         list.push(listener)
         listeners.set(event, list)
@@ -104,13 +139,12 @@ function createAgent({ id, cwd }) {
   }
 
   return {
-    agent,
+    agent: agent as unknown as AgentLike,
     mounts,
-    /** Events that stay on the agent's own scoped context, as a subagent's do. */
-    async emit(event, payload) {
+    async emit(event: string, payload: unknown) {
       for (const listener of [...(listeners.get(event) ?? [])]) await listener(payload)
     },
-    listenerCount(event) {
+    listenerCount(event: string) {
       return listeners.get(event)?.length ?? 0
     },
   }
@@ -122,7 +156,7 @@ async function workspace() {
 }
 
 /** Wait for fire-and-forget engine work the lifecycle listeners started. */
-async function until(predicate) {
+async function until(predicate: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (predicate()) return
     await new Promise((resolve) => setImmediate(resolve))
@@ -140,14 +174,15 @@ test('mounts the shipped MCP bridge on the conversation workspace with the compa
     await harness.emit('agent/created', { agent, source: 'startup' })
 
     assert.equal(mounts.length, 1, 'one engine per live conversation')
-    const [{ plugin, config }] = mounts
-    assert.equal(plugin.name, 'mcp-client', 'the shipped MCP client bridge is the child plugin')
-    assert.deepEqual([...plugin.inject], ['tools'])
-    assert.equal(config.transport, 'stdio')
-    assert.equal(config.command, CLI)
-    assert.deepEqual(config.args, ['mcp', '--root', area.root, '--compact'])
-    assert.equal(config.cwd, area.root)
-    assert.match(config.serverName, /^[A-Za-z0-9_-]{1,32}$/)
+    const mount = mounts[0]
+    assert.ok(mount)
+    assert.equal(mount.plugin.name, 'mcp-client', 'the shipped MCP client bridge is the child plugin')
+    assert.deepEqual([...mount.plugin.inject ?? []], ['tools'])
+    assert.equal(mount.config.transport, 'stdio')
+    assert.equal(mount.config.command, CLI)
+    assert.deepEqual(mount.config.args, ['mcp', '--root', area.root, '--compact'])
+    assert.equal(mount.config.cwd, area.root)
+    assert.match(mount.config.serverName, /^[A-Za-z0-9_-]{1,32}$/)
   } finally {
     await area.cleanup()
   }
@@ -160,13 +195,13 @@ test('the compact surface is the default and the switch exposes the full catalog
     const defaultHarness = createHostContext()
     apply(defaultHarness.ctx, { cliPath: CLI })
     await defaultHarness.emit('agent/created', { agent: compact.agent })
-    assert.deepEqual(compact.mounts[0].config.args, ['mcp', '--root', area.root, '--compact'])
+    assert.deepEqual(compact.mounts[0]?.config.args, ['mcp', '--root', area.root, '--compact'])
 
     const fullAgent = createAgent({ id: 'b', cwd: area.root })
     const fullHarness = createHostContext()
     apply(fullHarness.ctx, { cliPath: CLI, compactSurface: false })
     await fullHarness.emit('agent/created', { agent: fullAgent.agent })
-    assert.deepEqual(fullAgent.mounts[0].config.args, ['mcp', '--root', area.root])
+    assert.deepEqual(fullAgent.mounts[0]?.config.args, ['mcp', '--root', area.root])
   } finally {
     await area.cleanup()
   }
@@ -185,10 +220,10 @@ test('a configured static root pins every conversation to that root instead', as
     await harness.emit('agent/created', { agent: second.agent })
 
     for (const { mounts } of [first, second]) {
-      assert.equal(mounts[0].config.args[2], pinned.root, 'the static root is the Agent MCP Root')
-      assert.equal(mounts[0].config.cwd, pinned.root)
+      assert.equal(mounts[0]?.config.args[2], pinned.root, 'the static root is the Agent MCP Root')
+      assert.equal(mounts[0]?.config.cwd, pinned.root)
     }
-    assert.equal(first.mounts[0].config.serverName, second.mounts[0].config.serverName)
+    assert.equal(first.mounts[0]?.config.serverName, second.mounts[0]?.config.serverName)
   } finally {
     await Promise.all([pinned.cleanup(), elsewhere.cleanup()])
   }
@@ -206,16 +241,16 @@ test('several live workspaces get distinct, stable namespaces and engines', asyn
     await harness.emit('agent/created', { agent: first.agent })
     await harness.emit('agent/created', { agent: other.agent })
 
-    const firstKey = first.mounts[0].config.serverName
-    assert.notEqual(firstKey, other.mounts[0].config.serverName, 'different roots never share a namespace')
-    assert.equal(first.mounts[0].fiber.disposed, false)
-    assert.equal(other.mounts[0].fiber.disposed, false)
+    const firstKey = first.mounts[0]?.config.serverName
+    assert.notEqual(firstKey, other.mounts[0]?.config.serverName, 'different roots never share a namespace')
+    assert.equal(first.mounts[0]?.fiber.disposed, false)
+    assert.equal(other.mounts[0]?.fiber.disposed, false)
 
     await harness.emit('agent/disposed', { agent: first.agent })
     const again = createAgent({ id: 'a2', cwd: one.root })
     await harness.emit('agent/created', { agent: again.agent })
 
-    assert.equal(again.mounts[0].config.serverName, firstKey, 'one root always keeps its tool names')
+    assert.equal(again.mounts[0]?.config.serverName, firstKey, 'one root always keeps its tool names')
   } finally {
     await Promise.all([one.cleanup(), two.cleanup()])
   }
@@ -230,7 +265,8 @@ test('an idle workspace releases its engine and a later turn starts it again', a
 
     const { agent, mounts } = createAgent({ id: 'a', cwd: area.root })
     await harness.emit('agent/created', { agent })
-    const first = mounts[0].fiber
+    const first = mounts[0]?.fiber
+    assert.ok(first)
     assert.equal(first.disposed, false)
 
     await harness.emit('agent/status', { agent, status: 'idle' })
@@ -242,8 +278,8 @@ test('an idle workspace releases its engine and a later turn starts it again', a
 
     await harness.emit('agent/status', { agent, status: 'running' })
     await until(() => mounts.length === 2)
-    assert.equal(mounts[1].fiber.disposed, false, 'activity starts the engine again')
-    assert.equal(mounts[1].config.serverName, mounts[0].config.serverName, 'the tool names stay stable')
+    assert.equal(mounts[1]?.fiber.disposed, false, 'activity starts the engine again')
+    assert.equal(mounts[1]?.config.serverName, mounts[0]?.config.serverName, 'the tool names stay stable')
   } finally {
     mock.timers.reset()
     await area.cleanup()
@@ -259,7 +295,8 @@ test('an agent whose lifecycle events stay on its own context still releases its
 
     const { agent, mounts, emit } = createAgent({ id: 'child', cwd: area.root })
     await harness.emit('agent/created', { agent })
-    const first = mounts[0].fiber
+    const first = mounts[0]?.fiber
+    assert.ok(first)
     assert.equal(first.disposed, false)
 
     // A subagent's status is dispatched in its own context tree, which the host
@@ -270,8 +307,8 @@ test('an agent whose lifecycle events stay on its own context still releases its
 
     await emit('agent/status', { agent, status: 'running' })
     await until(() => mounts.length === 2)
-    assert.equal(mounts[1].fiber.disposed, false, 'scoped activity starts the engine again')
-    assert.equal(mounts[1].config.serverName, mounts[0].config.serverName, 'the tool names stay stable')
+    assert.equal(mounts[1]?.fiber.disposed, false, 'scoped activity starts the engine again')
+    assert.equal(mounts[1]?.config.serverName, mounts[0]?.config.serverName, 'the tool names stay stable')
   } finally {
     mock.timers.reset()
     await area.cleanup()
@@ -290,7 +327,7 @@ test('a conversation disposed on its own context withdraws its engine and subscr
     assert.ok(listenerCount('agent/disposed') > 0, 'the engine listens for the agent leaving')
 
     await emit('agent/disposed', { agent })
-    assert.equal(mounts[0].fiber.disposed, true, 'the scoped disposal withdraws the engine')
+    assert.equal(mounts[0]?.fiber.disposed, true, 'the scoped disposal withdraws the engine')
     assert.equal(listenerCount('agent/status'), 0, 'status subscriptions are released with the conversation')
     assert.equal(listenerCount('agent/disposed'), 0, 'disposal subscriptions are released too')
   } finally {
@@ -310,11 +347,11 @@ test('disposing the conversation or the plugin withdraws every engine', async ()
     await harness.emit('agent/created', { agent: second.agent })
 
     await harness.emit('agent/disposed', { agent: first.agent })
-    assert.equal(first.mounts[0].fiber.disposed, true, 'the conversation engine is withdrawn')
-    assert.equal(second.mounts[0].fiber.disposed, false, 'another live engine is untouched')
+    assert.equal(first.mounts[0]?.fiber.disposed, true, 'the conversation engine is withdrawn')
+    assert.equal(second.mounts[0]?.fiber.disposed, false, 'another live engine is untouched')
 
     harness.dispose()
-    assert.equal(second.mounts[0].fiber.disposed, true, 'unloading the plugin withdraws the rest')
+    assert.equal(second.mounts[0]?.fiber.disposed, true, 'unloading the plugin withdraws the rest')
   } finally {
     await area.cleanup()
   }

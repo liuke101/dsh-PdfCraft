@@ -18,10 +18,17 @@
  * both the host context and the Agent's own scoped context, because a
  * subagent's status and disposal are dispatched inside the latter.
  * Unloading the plugin or disposing the Agent withdraws every remaining engine.
+ *
+ * This module is mounted by the Web Component for now, so the package keeps
+ * one entry and one Loader row while the split proceeds. The CLI Component
+ * takes ownership of it in the next step; nothing else in the Panel depends on
+ * it.
  */
 import { createHash } from 'node:crypto'
 import { stat } from 'node:fs/promises'
 import { resolve } from 'node:path'
+
+import type { AgentLike, Disposer, HostContext } from '../web/host.ts'
 
 /** The command that starts the upstream engine when configuration names no other. */
 export const DEFAULT_CLI = 'pdfcraft-cli'
@@ -29,11 +36,37 @@ export const DEFAULT_CLI = 'pdfcraft-cli'
 /** How long a workspace may sit idle before its engine is released. */
 const IDLE_RELEASE_MS = 5 * 60 * 1000
 
-/** The module namespace of the shipped MCP client bridge, loaded once. */
-let bridge
+/** The settings the engines run with, resolved from the row's configuration. */
+export interface EngineSettings {
+  readonly cliPath: string
+  readonly staticRoot: string
+  readonly compactSurface: boolean
+}
+
+/** The three engine fields the row configures. */
+export interface AgentToolsConfig {
+  readonly cliPath?: string
+  readonly staticRoot?: string
+  readonly compactSurface?: boolean
+}
+
+/** One live Agent's engine slot. */
+interface EngineEntry {
+  wanted: boolean
+  timer: ReturnType<typeof setTimeout> | undefined
+  mounting: Promise<void> | undefined
+  releasing: Promise<void> | undefined
+  fiber: { dispose(): unknown } | undefined
+  root: string | undefined
+  subscriptions: Disposer[]
+}
+
+/** The shipped MCP client bridge, loaded lazily so a missing copy cannot break the rest. */
+type BridgeModule = typeof import('@deepseek-ai/dsh-mcp-client')
+let bridge: BridgeModule | undefined
 
 /** Load the bridge lazily so a missing copy cannot break the rest of the plugin. */
-async function loadBridge() {
+async function loadBridge(): Promise<BridgeModule> {
   bridge ??= await import('@deepseek-ai/dsh-mcp-client')
   return bridge
 }
@@ -42,12 +75,12 @@ async function loadBridge() {
  * The MCP server namespace for one root: distinct roots never share it, the
  * same root always does, and it satisfies the bridge's name pattern.
  */
-function serverNameFor(root) {
+function serverNameFor(root: string): string {
   return `pdfcraft-${createHash('sha256').update(root).digest('hex').slice(0, 10)}`
 }
 
 /** Resolve the row's configuration to the values the engines run with. */
-function settingsFrom(config) {
+function settingsFrom(config: AgentToolsConfig): EngineSettings {
   const cliPath = typeof config.cliPath === 'string' ? config.cliPath.trim() : ''
   const staticRoot = typeof config.staticRoot === 'string' ? config.staticRoot.trim() : ''
   return {
@@ -58,7 +91,7 @@ function settingsFrom(config) {
 }
 
 /** The Agent MCP Root for one Agent: the static override, else its workspace. */
-function rootFor(agent, settings) {
+function rootFor(agent: AgentLike, settings: EngineSettings): string | undefined {
   if (settings.staticRoot !== '') return settings.staticRoot
   const cwd = agent.session?.header?.cwd
   if (typeof cwd !== 'string' || cwd.trim() === '') return undefined
@@ -70,7 +103,7 @@ function rootFor(agent, settings) {
  * Root; `--compact` asks for its small search-and-call surface and is omitted
  * when the full catalogue is configured.
  */
-function bridgeConfigFor(root, settings) {
+function bridgeConfigFor(root: string, settings: EngineSettings): Record<string, unknown> {
   return {
     serverName: serverNameFor(root),
     transport: 'stdio',
@@ -87,23 +120,25 @@ function bridgeConfigFor(root, settings) {
 
 /**
  * Register the agent lifecycle listeners that mount and release engines.
- * @param {import('@deepseek-ai/cordis').Context} ctx - Host context owning the listeners.
- * @param {{ cliPath?: string, staticRoot?: string, compactSurface?: boolean }} [config] - resolved plugin configuration.
+ * @param ctx - Host context owning the listeners.
+ * @param config - resolved plugin configuration.
  */
-export function registerAgentTools(ctx, config = {}) {
+export function registerAgentTools(ctx: HostContext, config: AgentToolsConfig = {}): void {
   const settings = settingsFrom(config)
   /** One entry per live Agent, keyed by Agent id. */
-  const engines = new Map()
+  const engines = new Map<string, EngineEntry>()
 
-  const warn = (message) => ctx.logger?.warn?.(message)
+  const warn = (message: string): void => {
+    ctx.logger?.warn?.(message)
+  }
 
-  const clearIdle = (entry) => {
+  const clearIdle = (entry: EngineEntry): void => {
     if (entry.timer === undefined) return
     clearTimeout(entry.timer)
     entry.timer = undefined
   }
 
-  const release = (entry) => {
+  const release = (entry: EngineEntry): Promise<void> => {
     const fiber = entry.fiber
     entry.fiber = undefined
     if (fiber === undefined) return Promise.resolve()
@@ -111,7 +146,7 @@ export function registerAgentTools(ctx, config = {}) {
       try {
         await fiber.dispose()
       } catch (error) {
-        warn(`dsh-pdfcraft: releasing the engine for ${entry.root} failed: ${error.message}`)
+        warn(`dsh-pdfcraft: releasing the engine for ${entry.root} failed: ${(error as Error).message}`)
       }
     })()
     entry.releasing = stopping
@@ -122,7 +157,7 @@ export function registerAgentTools(ctx, config = {}) {
   }
 
   /** Withdraw the engine after the idle grace; activity cancels the timer. */
-  const scheduleIdleRelease = (entry) => {
+  const scheduleIdleRelease = (entry: EngineEntry): void => {
     if (entry.timer !== undefined) return
     entry.timer = setTimeout(() => {
       entry.timer = undefined
@@ -130,14 +165,14 @@ export function registerAgentTools(ctx, config = {}) {
       entry.wanted = false
       void release(entry)
     }, IDLE_RELEASE_MS)
-    entry.timer.unref?.()
+    entry.timer.unref()
   }
 
   /**
    * Start the engine for one Agent if it has a usable root and none is running.
    * Mount failures are logged, never allowed to reject Agent creation.
    */
-  const provision = async (agent) => {
+  const provision = async (agent: AgentLike): Promise<void> => {
     const entry = engines.get(agent.id)
     if (entry === undefined || !entry.wanted || entry.fiber !== undefined) return
     if (entry.mounting !== undefined) return entry.mounting
@@ -177,7 +212,7 @@ export function registerAgentTools(ctx, config = {}) {
         entry.fiber = fiber
         entry.root = root
       } catch (error) {
-        warn(`dsh-pdfcraft: the PdfCraft engine for ${root} could not start: ${error.message}`)
+        warn(`dsh-pdfcraft: the PdfCraft engine for ${root} could not start: ${(error as Error).message}`)
       }
     })()
 
@@ -196,14 +231,14 @@ export function registerAgentTools(ctx, config = {}) {
    * The scoped listener also catches agent-scoped descendants, which are
    * filtered out below because each of them has an entry of its own.
    */
-  const subscribe = (entry, agent) => {
-    const on = agent.ctx?.on
+  const subscribe = (entry: EngineEntry, agent: AgentLike): void => {
+    const on = agent.ctx.on
     if (typeof on !== 'function') return
-    const add = (event, listener) => {
+    const add = (event: string, listener: (payload: any) => unknown): void => {
       const off = on.call(agent.ctx, event, listener)
-      if (typeof off === 'function') entry.subscriptions.push(off)
+      if (typeof off === 'function') entry.subscriptions.push(off as Disposer)
     }
-    add('agent/status', (payload = {}) => {
+    add('agent/status', (payload: { agent?: AgentLike; status?: string } = {}) => {
       if (payload.agent !== undefined && payload.agent.id !== agent.id) return
       applyStatus(agent, payload.status)
     })
@@ -213,7 +248,7 @@ export function registerAgentTools(ctx, config = {}) {
   }
 
   /** Handle an Agent's status where it is observed: host or scoped context. */
-  const applyStatus = (agent, status) => {
+  const applyStatus = (agent: AgentLike, status: string | undefined): void => {
     const entry = engines.get(agent.id)
     if (entry === undefined) return
     if (status === 'idle') {
@@ -223,11 +258,13 @@ export function registerAgentTools(ctx, config = {}) {
     if (status !== 'running') return
     entry.wanted = true
     clearIdle(entry)
-    void provision(agent).catch((error) => warn(`dsh-pdfcraft: starting the PdfCraft engine failed: ${error.message}`))
+    void provision(agent).catch((error: unknown) => {
+      warn(`dsh-pdfcraft: starting the PdfCraft engine failed: ${(error as Error).message}`)
+    })
   }
 
   /** Forget one Agent and withdraw its engine and subscriptions. */
-  const retire = async (agentId) => {
+  const retire = async (agentId: string): Promise<void> => {
     const entry = engines.get(agentId)
     if (entry === undefined) return
     engines.delete(agentId)
@@ -243,8 +280,8 @@ export function registerAgentTools(ctx, config = {}) {
     await release(entry)
   }
 
-  ctx.on('agent/created', async ({ agent }) => {
-    const entry = {
+  ctx.on?.('agent/created', async ({ agent }: { agent: AgentLike }) => {
+    const entry: EngineEntry = {
       wanted: true,
       timer: undefined,
       mounting: undefined,
@@ -258,11 +295,11 @@ export function registerAgentTools(ctx, config = {}) {
     await provision(agent)
   })
 
-  ctx.on('agent/status', ({ agent, status }) => {
+  ctx.on?.('agent/status', ({ agent, status }: { agent: AgentLike; status?: string }) => {
     applyStatus(agent, status)
   })
 
-  ctx.on('agent/disposed', async ({ agent }) => {
+  ctx.on?.('agent/disposed', async ({ agent }: { agent: AgentLike }) => {
     await retire(agent.id)
   })
 

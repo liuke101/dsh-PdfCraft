@@ -4,7 +4,19 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { apply } from '../index.js'
+import type { ToolDefinition, ToolRunContext } from '@deepseek-ai/dsh-tools'
+
+import { apply } from '../src/web/index.ts'
+import type {
+  CommandDefinition,
+  CommandInput,
+  HostContext,
+  SessionLike,
+  SessionStore,
+  WebServerRoute,
+} from '../src/web/host.ts'
+import type { RouteRequest, RouteResponse } from '../src/web/http.ts'
+import type { PanelOpens } from '../src/web/panel-opens.ts'
 
 const PUSHES_PATH = '/pdfcraft/pushes'
 const BINDING_PATH = '/pdfcraft/binding'
@@ -17,44 +29,44 @@ const OTHER_SESSION = 'session-two'
  * the Session store the Panel reads a workspace through, the command and tool
  * registries, and the published services (bindings and the Push Channel).
  */
-function createContext({ sessions = {} } = {}) {
-  const routes = []
-  const effects = []
-  const services = new Map()
-  const commands = []
-  const tools = []
+function createContext({ sessions = {} }: { sessions?: Record<string, SessionLike> } = {}) {
+  const routes: WebServerRoute[] = []
+  const effects: Array<() => unknown> = []
+  const services = new Map<string, unknown>()
+  const commands: CommandDefinition[] = []
+  const tools: ToolDefinition[] = []
 
-  const ctx = {
+  const context = {
     webServer: {
-      register(route) {
+      register(route: WebServerRoute) {
         routes.push(route)
         return () => {}
       },
     },
     sessions: {
-      get(id) {
+      get(id: string) {
         return sessions[id]
       },
-    },
+    } satisfies SessionStore,
     commands: {
-      register(definition) {
+      register(definition: CommandDefinition) {
         commands.push(definition)
         return () => {
-          definition.removed = true
+          ;(definition as CommandDefinition & { removed?: boolean }).removed = true
         }
       },
     },
     tools: {
-      register(definition) {
+      register(definition: ToolDefinition) {
         tools.push(definition)
         return () => {
-          definition.removed = true
+          ;(definition as ToolDefinition & { removed?: boolean }).removed = true
         }
       },
     },
-    effect(body) {
+    effect(body: () => (() => unknown) | undefined) {
       const dispose = body()
-      effects.push(dispose)
+      effects.push(dispose ?? (() => {}))
       return dispose
     },
     on() {
@@ -63,34 +75,34 @@ function createContext({ sessions = {} } = {}) {
     logger: {
       warn() {},
     },
-    get(name) {
+    get(name: string) {
       return services.get(name)
     },
-    provide(name, value) {
+    provide(name: string, value: unknown) {
       services.set(name, value)
       return () => services.delete(name)
     },
   }
 
   return {
-    ctx,
+    ctx: context as unknown as HostContext,
     routes,
     commands,
     tools,
     services,
-    route(kind, path) {
+    route(kind: 'exact' | 'prefix', path: string): WebServerRoute {
       const route = routes.find((candidate) => candidate.kind === kind && candidate.path === path)
       assert.ok(route, `expected a ${kind} route at ${path}`)
       return route
     },
-    openCommand() {
+    openCommand(): CommandDefinition | undefined {
       return commands.find((definition) => definition.name === 'pdfcraft')
     },
-    openTool() {
+    openTool(): ToolDefinition | undefined {
       return tools.find((definition) => definition.name === 'pdfcraft_open')
     },
-    opens() {
-      const channel = services.get('pdfcraftOpens')
+    opens(): PanelOpens {
+      const channel = services.get('pdfcraftOpens') as PanelOpens | undefined
       assert.ok(channel, 'the plugin publishes the Push Channel as pdfcraftOpens')
       return channel
     },
@@ -101,7 +113,7 @@ function createContext({ sessions = {} } = {}) {
 }
 
 /** A node:http-shaped request the registered Web route handler receives. */
-function request(url, method = 'GET') {
+function request(url: string, method = 'GET'): RouteRequest {
   return {
     url,
     method,
@@ -111,39 +123,50 @@ function request(url, method = 'GET') {
 }
 
 /** A node:http-shaped response that records what the SSE adapter wrote. */
-function response() {
-  const chunks = []
-  const listeners = new Map()
-  return {
+interface RecordedResponse extends RouteResponse {
+  statusCode: number
+  headers: Record<string, string>
+  writableEnded: boolean
+  readonly body: string
+}
+
+function response(): RecordedResponse {
+  const chunks: Buffer[] = []
+  const listeners = new Map<string, Array<() => void>>()
+  const recorded: RecordedResponse = {
     statusCode: 200,
     headers: {},
     writableEnded: false,
     get body() {
       return Buffer.concat(chunks).toString('utf8')
     },
-    writeHead(status, headers = {}) {
-      this.statusCode = status
-      Object.assign(this.headers, headers)
+    writeHead(status: number, headers: Record<string, string> = {}) {
+      recorded.statusCode = status
+      Object.assign(recorded.headers, headers)
     },
-    write(chunk) {
+    write(chunk: string | Uint8Array) {
       chunks.push(Buffer.from(chunk))
       return true
     },
-    end(chunk) {
+    end(chunk?: string | Uint8Array) {
       if (chunk !== undefined) chunks.push(Buffer.from(chunk))
-      this.writableEnded = true
+      recorded.writableEnded = true
     },
-    on(event, listener) {
+    on(event: string, listener: () => void) {
       const registered = listeners.get(event) ?? []
       registered.push(listener)
       listeners.set(event, registered)
-      return this
+      return recorded
     },
   }
+  return recorded
 }
 
 /** Drive one registered route the way the Web server would. */
-async function attach(harness, session = SESSION) {
+async function attach(
+  harness: ReturnType<typeof createContext>,
+  session = SESSION,
+): Promise<RecordedResponse> {
   const res = response()
   await harness.route('exact', PUSHES_PATH).handler(
     request(`${PUSHES_PATH}?${new URLSearchParams({ session }).toString()}`),
@@ -153,7 +176,7 @@ async function attach(harness, session = SESSION) {
 }
 
 /** Parse the SSE frames a response received into their JSON payloads. */
-function events(res) {
+function events(res: RecordedResponse): any[] {
   return res.body
     .split('\n\n')
     .filter((frame) => frame.startsWith('data:'))
@@ -167,12 +190,15 @@ async function workspace() {
     sessions: {
       [SESSION]: { header: { id: SESSION, cwd: root } },
       [OTHER_SESSION]: { header: { id: OTHER_SESSION, cwd: root } },
-    },
+    } satisfies Record<string, SessionLike>,
     cleanup: () => rm(root, { recursive: true, force: true }),
   }
 }
 
-function mount(harness, config = {}) {
+function mount(
+  harness: ReturnType<typeof createContext>,
+  config: Record<string, unknown> = {},
+): void {
   apply(harness.ctx, {
     webBuildDir: join(tmpdir(), 'dsh-pdfcraft-no-build'),
     ...config,
@@ -180,7 +206,11 @@ function mount(harness, config = {}) {
 }
 
 /** Run a registered command the way a human command adapter would. */
-async function runCommand(harness, session = SESSION, rawInput = '') {
+async function runCommand(
+  harness: ReturnType<typeof createContext>,
+  session = SESSION,
+  rawInput = '',
+): Promise<{ readonly kind: string; readonly text: string }> {
   const definition = harness.openCommand()
   assert.ok(definition, 'the plugin registers a /pdfcraft command')
   return definition.handler({
@@ -189,11 +219,15 @@ async function runCommand(harness, session = SESSION, rawInput = '') {
     rawInput,
     attachments: [],
     signal: new AbortController().signal,
-  })
+  } as unknown as CommandInput)
 }
 
 /** Run the registered open tool the way the agent loop would. */
-async function runTool(harness, path, session = SESSION) {
+async function runTool(
+  harness: ReturnType<typeof createContext>,
+  path: string | undefined,
+  session = SESSION,
+): Promise<unknown> {
   const definition = harness.openTool()
   assert.ok(definition, 'the plugin registers the pdfcraft_open tool')
   const args = path === undefined ? {} : { path }
@@ -205,7 +239,7 @@ async function runTool(harness, path, session = SESSION) {
       arguments: args,
       agent: { id: `agent-${session}`, session: { id: session } },
       signal: new AbortController().signal,
-    },
+    } as unknown as ToolRunContext,
   )
 }
 
@@ -220,7 +254,7 @@ test('the command opens the Panel at the named document, exactly once', async ()
 
     const first = await attach(harness)
     assert.equal(first.statusCode, 200)
-    assert.match(first.headers['content-type'], /^text\/event-stream/)
+    assert.match(first.headers['content-type'] ?? '', /^text\/event-stream/)
     const [event] = events(first)
     assert.equal(event.type, 'open')
     assert.equal(typeof event.id, 'string')
@@ -389,7 +423,11 @@ test('the delivery route needs the conversation id and refuses other methods', a
 })
 
 /** Drive any registered exact route and return its response. */
-async function callRoute(harness, path, url) {
+async function callRoute(
+  harness: ReturnType<typeof createContext>,
+  path: string,
+  url: string,
+): Promise<RecordedResponse> {
   const res = response()
   await harness.route('exact', path).handler(request(url), res)
   return res

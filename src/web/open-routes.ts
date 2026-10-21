@@ -3,7 +3,7 @@
  *
  * `GET /pdfcraft/pushes?session=<id>` attaches a stream for that conversation
  * and flushes any open request that was waiting for it. The policy lives in
- * `panel-opens.js`; this module only validates the request, writes the SSE
+ * `panel-opens.ts`; this module only validates the request, writes the SSE
  * framing, and makes sure an unloaded plugin closes the streams it owned.
  *
  * The stream carries `data: {"type":"open","id":...,"sessionId":...,"document":...}`
@@ -11,23 +11,28 @@
  * fresh stream and receives only requests created after the last delivery; a
  * Panel that was already opened is not opened again.
  */
-import { queryOf, sendJson } from './http.js'
+import { queryOf, sendJson, type RouteHandler, type RouteResponse } from './http.ts'
+import type { PanelOpens } from './panel-opens.ts'
 
 /** The SSE media type; the browser half listens with EventSource. */
 const EVENT_STREAM = 'text/event-stream'
 
+/** The Push Channel's route and its teardown. */
+export interface PushSurface {
+  readonly handler: RouteHandler
+  /** Ends every attached stream; the plugin is going away. */
+  close(): void
+}
+
 /**
  * Build the Push Channel route.
- *
- * @param {object} opens - the Push Channel from `createPanelOpens`.
- * @returns {{handler: (request: object, response: object) => void, close: () => void}}
- *   the route handler, and a teardown that ends every attached stream.
+ * @param opens - the Push Channel from `createPanelOpens`.
  */
-export function createPushHandler(opens) {
+export function createPushHandler(opens: PanelOpens): PushSurface {
   /** Responses currently holding a stream open; ended when the plugin unloads. */
-  const streams = new Set()
+  const streams = new Set<RouteResponse>()
 
-  const handler = (request, response) => {
+  const handler: RouteHandler = (request, response) => {
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.writeHead(405, {
         'content-type': 'text/plain; charset=utf-8',
@@ -68,8 +73,8 @@ export function createPushHandler(opens) {
     response.write(': connected\n\n')
 
     let detached = false
-    let unsubscribe
-    const detach = () => {
+    let unsubscribe: (() => void) | undefined
+    const detach = (): void => {
       if (detached) return
       detached = true
       streams.delete(response)
@@ -81,13 +86,11 @@ export function createPushHandler(opens) {
     })
 
     streams.add(response)
-    if (typeof response.on === 'function') {
-      response.on('close', detach)
-      response.on('error', detach)
-    }
+    response.on?.('close', detach)
+    response.on?.('error', detach)
   }
 
-  const close = () => {
+  const close = (): void => {
     for (const response of [...streams]) {
       streams.delete(response)
       try {

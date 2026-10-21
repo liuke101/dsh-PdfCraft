@@ -4,8 +4,9 @@ The unit tests drive decisions, not the browser. The glue that turns a save into
 a write-back — frame message → fetch → conflict dialog — has no seam, and one
 defect there (`readFailure is not defined`, see #10) shipped past a green suite
 and was caught only by walking the interface by hand. Run this whenever a change
-touches `client.js`, the document routes, or the open tool, and before closing a
-map whose Testing Decisions call for manual verification.
+touches the browser half (`src/web/client/`), the Workspace Document routes
+(`src/web/document-routes.ts`), or the open tool (`src/web/panel-opens.ts`), and
+before closing a map whose Testing Decisions call for manual verification.
 
 ## Before you start
 
@@ -58,7 +59,7 @@ enough; generate one with `pdfcraft-cli` or copy a fixture in.
 The Panel registers through better-sidebar when it is present and through DSH's
 own right sidebar otherwise. This profile usually has better-sidebar installed,
 so the live run exercises only that path; switching means disabling a bundle for
-the whole profile and restarting the web server. `test/client-plugin.test.js`
+the whole profile and restarting the web server. `test/client-bundle.test.ts`
 asserts one path or the other, which is the intended substitute. Say so when you
 record the result instead of leaving it silently unchecked.
 

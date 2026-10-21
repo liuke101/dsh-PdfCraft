@@ -1,18 +1,17 @@
 /**
- * Host half of dsh-pdfcraft.
+ * Host half of dsh-pdfcraft's Web Component: the Panel's HTTP surface.
  *
- * It serves the Panel's HTTP surface — the readiness report, the real PdfCraft
- * web assembly from the profile's own origin, and the Workspace Document routes
- * that bind a conversation's file and write it back — and it gives each
- * conversation's agent the upstream PdfCraft MCP tools confined to that
- * conversation's workspace. Every registration is released with the plugin's
- * fiber, so uninstalling the bundle withdraws the HTTP surface and every
- * running engine with nothing left behind.
+ * It serves the readiness report, the real PdfCraft web assembly from the
+ * profile's own origin, and the Workspace Document routes that bind a
+ * conversation's file and write it back. It also publishes the binding
+ * registry as `pdfcraftBindings` and the Push Channel as `pdfcraftOpens`: the
+ * command and the model-facing tool create open requests there, the Panel's
+ * browser half holds the conversation's view open, and the controller opens
+ * the page when one arrives.
  *
- * The binding registry is also published as the `pdfcraftBindings` service,
- * and the Push Channel as `pdfcraftOpens`. The command and the model-facing
- * tool create open requests there; the Panel's browser half holds the
- * conversation's view open and the controller opens the page when one arrives.
+ * The per-agent engine is still mounted here for one step, so the package
+ * stays one entry and one Loader row while the split proceeds. The CLI
+ * Component takes it over next; the Panel does not depend on it.
  *
  * The Push Channel is how the harness half asks the browser to open the Panel.
  * A request binds one Workspace Document per conversation, is delivered once
@@ -21,10 +20,7 @@
  */
 import Schema from '@deepseek-ai/schemastery'
 
-import { DEFAULT_CLI, registerAgentTools } from './lib/agent-tools.js'
-import { createBindingHandler, createDocumentHandler } from './lib/document-routes.js'
-import { createPushHandler } from './lib/open-routes.js'
-import { createPanelOpens, registerOpenCommand, registerOpenTool } from './lib/panel-opens.js'
+import { DEFAULT_CLI, registerAgentTools } from '../cli/agent-tools.ts'
 import {
   ASSET_PREFIX,
   BINDING_PATH,
@@ -32,14 +28,18 @@ import {
   PLUGIN_NAME,
   PUSHES_PATH,
   STATUS_PATH,
-} from './dist/shared/paths.js'
-import { createAssetHandler, createStatusHandler } from './lib/web-build.js'
+} from '../shared/paths.ts'
+import { createBindingHandler, createDocumentHandler } from './document-routes.ts'
+import type { HostContext } from './host.ts'
+import { createPushHandler } from './open-routes.ts'
+import { createPanelOpens, registerOpenCommand, registerOpenTool } from './panel-opens.ts'
+import { createAssetHandler, createStatusHandler } from './web-build.ts'
 import {
   createBindingRegistry,
   createRevisionRegistry,
   DEFAULT_MAX_DOCUMENT_BYTES,
   normalizeMaxBytes,
-} from './lib/workspace-document.js'
+} from './workspace-document.ts'
 
 /** Plugin name used in fiber diagnostics. */
 export const name = PLUGIN_NAME
@@ -97,12 +97,15 @@ export const Config = Schema.object({
     ),
 })
 
+/** The row's configuration after validation. */
+export type WebConfig = ReturnType<typeof Config>
+
 /**
- * Register the Panel's HTTP surface and the per-conversation agent engines.
- * @param {import('@deepseek-ai/cordis').Context} ctx - Host context carrying the Web server.
- * @param {{ webBuildDir?: string, cliPath?: string, staticRoot?: string, compactSurface?: boolean, openTool?: boolean, maxDocumentBytes?: number }} [config] - resolved plugin configuration.
+ * Register the Panel's HTTP surface and, for now, the per-conversation agent engines.
+ * @param ctx - Host context carrying the Web server.
+ * @param config - resolved plugin configuration.
  */
-export function apply(ctx, config = {}) {
+export function apply(ctx: HostContext, config: Partial<WebConfig> = {}): void {
   const webBuildDir = typeof config.webBuildDir === 'string' ? config.webBuildDir : ''
   const maxDocumentBytes = normalizeMaxBytes(config.maxDocumentBytes)
 
@@ -110,9 +113,7 @@ export function apply(ctx, config = {}) {
   // It is this activation's own registry; publishing it as a service lets the
   // Push Channel reach the same instance from outside this function.
   const bindings = createBindingRegistry()
-  if (typeof ctx.provide === 'function') {
-    ctx.provide('pdfcraftBindings', bindings)
-  }
+  ctx.provide?.('pdfcraftBindings', bindings)
   const revisions = createRevisionRegistry()
 
   // One Push Channel per activation. It binds a document before it tells the
@@ -124,9 +125,7 @@ export function apply(ctx, config = {}) {
     enabled: openTool,
     warn: (message) => ctx.logger?.warn?.(message),
   })
-  if (typeof ctx.provide === 'function') {
-    ctx.provide('pdfcraftOpens', opens)
-  }
+  ctx.provide?.('pdfcraftOpens', opens)
   if (!openTool) {
     opens.setEnabled(false)
   } else {

@@ -1,14 +1,10 @@
 /**
- * Public addresses of the Panel's HTTP surface, as one module so the host half,
- * its tests, and any future caller name the same paths.
+ * Public addresses of the Panel's HTTP surface and the upstream release pin,
+ * as one module so the host half and the browser half name the same values.
  *
- * This file is the host's one source of the constants. `npm run build`
- * compiles it to the committed `dist/shared/paths.js`, which the host imports.
- * The browser half is still a self-contained classic script (ADR-0002), so
- * `client.js` repeats the addresses it calls (`APP_PATH`, `STATUS_PATH`,
- * `BINDING_PATH`, `DOCUMENT_PATH`, `PUSHES_PATH`) and the release pin and
- * web-build filename it falls back to; the follow-up browser build removes
- * that mirror. Until then, keep the two copies in step.
+ * `npm run build` compiles this file into both outputs: the compiled host
+ * imports `dist/shared/paths.js`, and the browser bundle inlines
+ * `dist/web/client.js`, so neither half keeps a hand-copied address.
  */
 /** Loader row id and package name of this bundle. */
 export declare const PLUGIN_NAME = "dsh-pdfcraft";
@@ -32,3 +28,5 @@ export declare const DOCUMENT_PATH = "/pdfcraft/document";
 export declare const PUSHES_PATH = "/pdfcraft/pushes";
 /** Response header carrying the revision the Panel must quote on a Write-back. */
 export declare const REVISION_HEADER = "x-pdfcraft-revision";
+/** Request header carrying the person's explicit overwrite-anyway choice. */
+export declare const FORCE_HEADER = "x-pdfcraft-force";

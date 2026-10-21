@@ -1,5 +1,12 @@
-# dsh-pdfcraft: one Host row. The browser half is discovered through the
-# package's `dsh.client` declaration; no separate client row is inserted.
+# dsh-pdfcraft: one Host row for the Web Component. The browser half is
+# discovered through the package's `dsh.client` declaration; no separate client
+# row is inserted.
+#
+# The row keeps the bare package specifier. `@deepseek-ai/dsh-client-modules`
+# reads `dsh.client` only from a Loader row whose name is a bare package name,
+# so `exports["."]` points at the Web Component entry; the `./web` subpath is
+# the same module for direct import. A subpath row would load the host half but
+# silently contribute no browser bundle.
 #
 # `webBuildDir` is where the person extracted the PdfCraft web release the
 # Panel names when it reports a missing build. The default keeps the build

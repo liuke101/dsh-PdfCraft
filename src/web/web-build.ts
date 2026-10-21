@@ -1,26 +1,33 @@
 /**
- * The Panel's HTTP surface as pure request-to-response decisions, with two
- * thin node:http adapters at the bottom.
+ * The Panel's HTTP surface for the Embedded App, with two thin adapters at the
+ * bottom.
  *
  * Everything the browser needs comes from the configured web build directory:
  * `index.html`, the wasm-bindgen glue, and the WebAssembly module. The route
- * deliberately knows nothing about DSH vocabulary beyond the paths it serves,
- * so its behavior is testable without a server and without a Cordis context.
+ * deliberately knows nothing about harness vocabulary beyond the paths it
+ * serves, so its behavior is testable without a server and without a Cordis
+ * context.
  */
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, extname, resolve, sep } from 'node:path'
 
-import { send, sendJson } from './http.js'
 import {
   APP_PATH,
   ASSET_PREFIX,
   WEB_BUILD_FILENAME,
   WEB_RELEASE,
   WEB_RELEASE_URL,
-} from '../dist/shared/paths.js'
+} from '../shared/paths.ts'
+import {
+  send,
+  sendJson,
+  type RouteHandler,
+  type RouteRequest,
+  type RouteResponse,
+} from './http.ts'
 
 /** Media types the browser refuses to render under a generic fallback. */
-const CONTENT_TYPES = new Map([
+const CONTENT_TYPES = new Map<string, string>([
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
   ['.mjs', 'text/javascript; charset=utf-8'],
@@ -43,7 +50,7 @@ const CONTENT_TYPES = new Map([
 ])
 
 /** The browser's required type for each file, by extension. */
-function contentTypeFor(pathname) {
+function contentTypeFor(pathname: string): string {
   return CONTENT_TYPES.get(extname(pathname).toLowerCase()) ?? 'application/octet-stream'
 }
 
@@ -51,7 +58,7 @@ function contentTypeFor(pathname) {
  * Hashed build files can be cached forever; only the document needs
  * revalidation (see the upstream HOSTING.md).
  */
-function cacheControlFor(pathname) {
+function cacheControlFor(pathname: string): string {
   if (basename(pathname) === 'index.html') return 'no-cache'
   return /\.(?:js|mjs|wasm|css|woff2?)$/i.test(pathname)
     ? 'public, max-age=31536000, immutable'
@@ -59,11 +66,22 @@ function cacheControlFor(pathname) {
 }
 
 /** The JSON readiness report the Panel asks for before it mounts the frame. */
-async function inspectWebBuild(webBuildDir) {
-  const status = {
+export interface WebBuildStatus {
+  readonly ready: boolean
+  readonly reason: 'not-configured' | 'missing-build' | 'not-a-directory' | 'missing-index' | 'ready'
+  readonly directory: string
+  readonly file: string
+  readonly release: string
+  readonly releaseUrl: string
+  readonly appPath: string
+}
+
+/** The readiness report for one configured directory. */
+export async function inspectWebBuild(webBuildDir: string): Promise<WebBuildStatus> {
+  const status: WebBuildStatus = {
     ready: false,
     reason: 'missing-build',
-    directory: typeof webBuildDir === 'string' ? webBuildDir : '',
+    directory: webBuildDir,
     file: WEB_BUILD_FILENAME,
     release: WEB_RELEASE,
     releaseUrl: WEB_RELEASE_URL,
@@ -91,29 +109,29 @@ async function inspectWebBuild(webBuildDir) {
 }
 
 /** The request's pathname, resolved against the harness's own dummy origin. */
-function pathnameOf(request) {
+function pathnameOf(request: RouteRequest): string {
   return new URL(request.url ?? '/', 'http://dsh.internal').pathname
 }
 
 /** The plain-text answer a direct visit gets when the build is absent. */
-function missingBuildMessage(status) {
+function missingBuildMessage(status: WebBuildStatus): string {
   const directory = status.directory.trim() === '' ? '(not configured)' : status.directory
   return `PdfCraft web build not found. Fetch ${status.file} from ${status.releaseUrl}, `
     + `extract it, then set webBuildDir to the extracted folder. Currently configured: ${directory}.`
 }
 
-function isReadableMethod(method) {
+function isReadableMethod(method: string | undefined): boolean {
   return method === 'GET' || method === 'HEAD'
 }
 
-function notFound(response, request) {
+function notFound(response: RouteResponse, request: RouteRequest): void {
   send(response, request, 404, {
     'content-type': 'text/plain; charset=utf-8',
     'cache-control': 'no-store',
   }, 'not found')
 }
 
-function methodNotAllowed(response, request) {
+function methodNotAllowed(response: RouteResponse, request: RouteRequest): void {
   send(response, request, 405, {
     'content-type': 'text/plain; charset=utf-8',
     allow: 'GET, HEAD',
@@ -121,7 +139,10 @@ function methodNotAllowed(response, request) {
 }
 
 /** Resolve one URL pathname below the build directory, or undefined when it escapes. */
-function resolveInside(webBuildDir, pathname) {
+function resolveInside(
+  webBuildDir: string,
+  pathname: string,
+): { readonly root: string; readonly target: string } | undefined {
   const root = resolve(webBuildDir)
   let decoded
   try {
@@ -135,7 +156,7 @@ function resolveInside(webBuildDir, pathname) {
   return { root, target }
 }
 
-async function realPathInside(root, target) {
+async function realPathInside(root: string, target: string): Promise<string | undefined> {
   try {
     const [realRoot, realTarget] = await Promise.all([realpath(root), realpath(target)])
     if (realTarget !== realRoot && !realTarget.startsWith(`${realRoot}${sep}`)) return undefined
@@ -148,9 +169,9 @@ async function realPathInside(root, target) {
 
 /**
  * Build the route handler that answers the Panel's readiness question.
- * @param {string} webBuildDir - the configured directory holding the web build.
+ * @param webBuildDir - the configured directory holding the web build.
  */
-export function createStatusHandler(webBuildDir) {
+export function createStatusHandler(webBuildDir: string): RouteHandler {
   return async (request, response) => {
     if (!isReadableMethod(request.method)) {
       methodNotAllowed(response, request)
@@ -162,9 +183,9 @@ export function createStatusHandler(webBuildDir) {
 
 /**
  * Build the route handler that serves the Embedded App and its assets.
- * @param {string} webBuildDir - the configured directory holding the web build.
+ * @param webBuildDir - the configured directory holding the web build.
  */
-export function createAssetHandler(webBuildDir) {
+export function createAssetHandler(webBuildDir: string): RouteHandler {
   return async (request, response) => {
     if (!isReadableMethod(request.method)) {
       methodNotAllowed(response, request)

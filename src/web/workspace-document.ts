@@ -16,48 +16,54 @@
  *   choices. Nothing is written before every check has passed, and the write
  *   itself replaces the file atomically.
  *
- * The binding registry is the seam the Push Channel (#5) drives: one Workspace
+ * The binding registry is the seam the Push Channel drives: one Workspace
  * Document per conversation, replaced in place by a later bind.
  */
 import { createHash, randomBytes } from 'node:crypto'
+import type { Stats } from 'node:fs'
 import { readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, resolve, sep } from 'node:path'
+
+import {
+  DOCUMENT_ERROR,
+  type BoundDocument,
+  type DocumentErrorCode,
+  type DocumentFailure,
+} from '../shared/protocol.ts'
+import type { SessionStore } from './host.ts'
 
 /** The per-document limit when the row does not configure one. */
 export const DEFAULT_MAX_DOCUMENT_BYTES = 32 * 1024 * 1024
 
-/** Stable failure codes; callers branch on these, never on message text. */
-export const DOCUMENT_ERROR = Object.freeze({
-  badRequest: 'workspace-document/bad-request',
-  unknownSession: 'workspace-document/unknown-session',
-  noWorkspace: 'workspace-document/no-workspace',
-  notFound: 'workspace-document/not-found',
-  outsideWorkspace: 'workspace-document/outside-workspace',
-  tooLarge: 'workspace-document/too-large',
-  notBound: 'workspace-document/not-bound',
-  notLoaded: 'workspace-document/not-loaded',
-  revisionConflict: 'workspace-document/revision-conflict',
-  writeFailed: 'workspace-document/write-failed',
-  internal: 'workspace-document/internal',
-})
-
 /** The choices a Revision Guard refusal offers the person. */
-export const REVISION_CHOICES = Object.freeze(['reload', 'overwrite'])
+export const REVISION_CHOICES = Object.freeze(['reload', 'overwrite'] as const)
+
+/** A refused read or Write-back, before it becomes an HTTP response. */
+export interface DocumentRefusal extends DocumentFailure {
+  readonly ok: false
+  readonly status: number
+}
 
 /** SHA-256 of one document's bytes, in lowercase hex. */
-export function revisionOf(bytes) {
+export function revisionOf(bytes: Uint8Array): string {
   return createHash('sha256').update(bytes).digest('hex')
 }
 
 /** Clamp a configured limit to a usable non-negative integer. */
-export function normalizeMaxBytes(value) {
+export function normalizeMaxBytes(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
     return DEFAULT_MAX_DOCUMENT_BYTES
   }
   return Math.floor(value)
 }
 
-function failure(status, code, message, details, choices) {
+function failure(
+  status: number,
+  code: DocumentErrorCode,
+  message: string,
+  details?: Record<string, unknown>,
+  choices?: readonly string[],
+): DocumentRefusal {
   return {
     ok: false,
     status,
@@ -69,21 +75,37 @@ function failure(status, code, message, details, choices) {
 }
 
 /** Whether one real path is the root itself or lies below it. */
-function isInside(root, target) {
+function isInside(root: string, target: string): boolean {
   if (target === root) return true
   const prefix = root.endsWith(sep) ? root : `${root}${sep}`
   return target.startsWith(prefix)
 }
 
 /** A document path is a non-empty string naming a file, never a NUL-bearing one. */
-function isDocumentPath(value) {
+function isDocumentPath(value: unknown): value is string {
   return typeof value === 'string' && value !== '' && !value.includes('\0')
 }
 
 /** The name the Panel and the person see, taken from the requested path. */
-function nameOf(documentPath) {
+function nameOf(documentPath: string): string {
   const name = basename(documentPath)
   return name === '' || name === '.' || name === sep ? 'document.pdf' : name
+}
+
+/** The per-conversation binding registry. */
+export interface BindingRegistry {
+  /**
+   * Bind (or replace) the one Workspace Document of a conversation.
+   * @param sessionId - the conversation the binding belongs to.
+   * @param documentPath - a path relative to the workspace, or absolute.
+   */
+  bind(sessionId: string, documentPath: string): BoundDocument
+  /** The conversation's bound document, or undefined in Standalone Mode. */
+  get(sessionId: string): BoundDocument | undefined
+  /** Drop the binding, leaving the conversation in Standalone Mode. */
+  clear(sessionId: string): boolean
+  /** Every current binding, in bind order (diagnostics and tests). */
+  entries(): Array<BoundDocument & { readonly sessionId: string }>
 }
 
 /**
@@ -94,15 +116,10 @@ function nameOf(documentPath) {
  * does not name one. A later bind for the same conversation replaces the
  * previous document in place, so one conversation never has two.
  */
-export function createBindingRegistry() {
-  const bySession = new Map()
+export function createBindingRegistry(): BindingRegistry {
+  const bySession = new Map<string, BoundDocument>()
 
   return {
-    /**
-     * Bind (or replace) the one Workspace Document of a conversation.
-     * @param {string} sessionId - the conversation the binding belongs to.
-     * @param {string} documentPath - a path relative to the workspace, or absolute.
-     */
     bind(sessionId, documentPath) {
       if (typeof sessionId !== 'string' || sessionId === '') {
         throw new TypeError('a binding needs a conversation id')
@@ -110,19 +127,16 @@ export function createBindingRegistry() {
       if (!isDocumentPath(documentPath)) {
         throw new TypeError('a binding needs a document path')
       }
-      const document = Object.freeze({ path: documentPath, name: nameOf(documentPath) })
+      const document: BoundDocument = Object.freeze({ path: documentPath, name: nameOf(documentPath) })
       bySession.set(sessionId, document)
       return document
     },
-    /** The conversation's bound document, or undefined in Standalone Mode. */
     get(sessionId) {
       return bySession.get(sessionId)
     },
-    /** Drop the binding, leaving the conversation in Standalone Mode. */
     clear(sessionId) {
       return bySession.delete(sessionId)
     },
-    /** Every current binding, in bind order (diagnostics and tests). */
     entries() {
       return [...bySession.entries()].map(([sessionId, document]) => ({ sessionId, ...document }))
     },
@@ -134,9 +148,15 @@ export function createBindingRegistry() {
  * One document is one revision: a read replaces the record, a Write-back
  * replaces it again with the hash of the bytes it wrote.
  */
-export function createRevisionRegistry() {
-  const records = new Map()
-  const keyOf = (sessionId, absolutePath) => `${sessionId}\0${absolutePath}`
+export interface RevisionRegistry {
+  record(sessionId: string, absolutePath: string, revision: string): void
+  get(sessionId: string, absolutePath: string): string | undefined
+}
+
+/** The revisions the read route issued, keyed by conversation and real file. */
+export function createRevisionRegistry(): RevisionRegistry {
+  const records = new Map<string, string>()
+  const keyOf = (sessionId: string, absolutePath: string): string => `${sessionId}\0${absolutePath}`
 
   return {
     record(sessionId, absolutePath, revision) {
@@ -148,8 +168,13 @@ export function createRevisionRegistry() {
   }
 }
 
+/** The workspace root a request resolves against, or the refusal explaining why not. */
+type WorkspaceRoot =
+  | { readonly ok: true; readonly root: string }
+  | DocumentRefusal
+
 /** Resolve the conversation's workspace root, or the refusal that explains why not. */
-function workspaceRootOf(sessions, sessionId) {
+function workspaceRootOf(sessions: SessionStore | undefined, sessionId: string): WorkspaceRoot {
   let session
   try {
     session = sessions?.get?.(sessionId)
@@ -170,11 +195,20 @@ function workspaceRootOf(sessions, sessionId) {
   return { ok: true, root: cwd }
 }
 
-/**
- * Resolve a requested document inside the workspace, following symlinks.
- * @returns the real root and target, or the refusal that stops the request.
- */
-async function resolveInsideWorkspace(sessions, sessionId, documentPath) {
+/** One document resolved inside the workspace. */
+interface ResolvedDocument {
+  readonly ok: true
+  readonly realTarget: string
+  readonly info: Stats
+  readonly name: string
+}
+
+/** Resolve a requested document inside the workspace, following symlinks. */
+async function resolveInsideWorkspace(
+  sessions: SessionStore | undefined,
+  sessionId: string,
+  documentPath: string,
+): Promise<ResolvedDocument | DocumentRefusal> {
   if (typeof sessionId !== 'string' || sessionId === '') {
     return failure(400, DOCUMENT_ERROR.badRequest, 'A request needs the conversation id (session).')
   }
@@ -218,11 +252,11 @@ async function resolveInsideWorkspace(sessions, sessionId, documentPath) {
     return failure(404, DOCUMENT_ERROR.notFound, `Not a regular file: ${documentPath}.`)
   }
 
-  return { ok: true, realRoot, realTarget, info, name: nameOf(documentPath) }
+  return { ok: true, realTarget, info, name: nameOf(documentPath) }
 }
 
 /** The refusal for a document above the configured per-document limit. */
-export function documentTooLarge(maxBytes, bytes) {
+export function documentTooLarge(maxBytes: number, bytes?: number): DocumentRefusal {
   const measured = typeof bytes === 'number'
     ? `This document is ${bytes} bytes; `
     : 'This document is over the limit; '
@@ -234,17 +268,34 @@ export function documentTooLarge(maxBytes, bytes) {
   )
 }
 
+/** A read that succeeded. */
+export interface WorkspaceDocumentRead {
+  readonly ok: true
+  readonly bytes: Buffer
+  readonly revision: string
+  readonly name: string
+  readonly path: string
+}
+
+/** The options a read needs. */
+export interface ReadWorkspaceDocumentOptions {
+  readonly sessions: SessionStore | undefined
+  readonly revisions: RevisionRegistry
+  readonly sessionId: string
+  readonly documentPath: string
+  readonly maxBytes: number
+}
+
 /**
  * Read one Workspace Document and record the revision the Panel will hold.
- *
- * @param {object} options
- * @param {{get(id: string): object | undefined}} options.sessions - the Session store.
- * @param {ReturnType<typeof createRevisionRegistry>} options.revisions - issued revisions.
- * @param {string} options.sessionId - the conversation.
- * @param {string} options.documentPath - relative or absolute path, contained by the workspace.
- * @param {number} options.maxBytes - the per-document limit.
  */
-export async function readWorkspaceDocument({ sessions, revisions, sessionId, documentPath, maxBytes }) {
+export async function readWorkspaceDocument({
+  sessions,
+  revisions,
+  sessionId,
+  documentPath,
+  maxBytes,
+}: ReadWorkspaceDocumentOptions): Promise<WorkspaceDocumentRead | DocumentRefusal> {
   const limit = normalizeMaxBytes(maxBytes)
   const resolved = await resolveInsideWorkspace(sessions, sessionId, documentPath)
   if (!resolved.ok) return resolved
@@ -272,7 +323,7 @@ export async function readWorkspaceDocument({ sessions, revisions, sessionId, do
 }
 
 /** Replace the file through a same-directory temp inode carrying its mode. */
-async function replaceAtomically(absolutePath, bytes, mode) {
+async function replaceAtomically(absolutePath: string, bytes: Uint8Array, mode: number): Promise<void> {
   const temp = `${absolutePath}.${randomBytes(6).toString('hex')}.tmp`
   try {
     await writeFile(temp, bytes, { flag: 'wx', mode: mode & 0o777 })
@@ -283,6 +334,30 @@ async function replaceAtomically(absolutePath, bytes, mode) {
   }
 }
 
+/** A Write-back that succeeded. */
+export interface WorkspaceDocumentWrite {
+  readonly ok: true
+  readonly path: string
+  readonly name: string
+  readonly revision: string
+  readonly bytes: number
+}
+
+/** The options a Write-back needs. */
+export interface WriteWorkspaceDocumentOptions {
+  readonly sessions: SessionStore | undefined
+  readonly revisions: RevisionRegistry
+  readonly sessionId: string
+  readonly documentPath: string
+  /** The revision the Panel loaded. */
+  readonly revision: string
+  /** The explicit overwrite-anyway choice after a Revision Guard refusal. */
+  readonly force?: boolean
+  /** The complete new document. */
+  readonly bytes: Uint8Array | undefined
+  readonly maxBytes: number
+}
+
 /**
  * Write the Panel's bytes back into a Workspace Document, under the Revision Guard.
  *
@@ -290,16 +365,6 @@ async function replaceAtomically(absolutePath, bytes, mode) {
  * leaves the file exactly as it was. `force` is the person's explicit
  * overwrite-anyway choice after a Revision Guard refusal; it still requires a
  * document the read route served.
- *
- * @param {object} options
- * @param {{get(id: string): object | undefined}} options.sessions - the Session store.
- * @param {ReturnType<typeof createRevisionRegistry>} options.revisions - issued revisions.
- * @param {string} options.sessionId - the conversation.
- * @param {string} options.documentPath - relative or absolute path, contained by the workspace.
- * @param {string} options.revision - the revision the Panel loaded.
- * @param {boolean} [options.force] - the explicit overwrite-anyway choice.
- * @param {Buffer | Uint8Array} options.bytes - the complete new document.
- * @param {number} options.maxBytes - the per-document limit.
  */
 export async function writeWorkspaceDocument({
   sessions,
@@ -310,7 +375,7 @@ export async function writeWorkspaceDocument({
   force = false,
   bytes,
   maxBytes,
-}) {
+}: WriteWorkspaceDocumentOptions): Promise<WorkspaceDocumentWrite | DocumentRefusal> {
   const limit = normalizeMaxBytes(maxBytes)
   if (typeof revision !== 'string' || revision === '') {
     return failure(400, DOCUMENT_ERROR.badRequest, 'A Write-back needs the revision the Panel loaded.')

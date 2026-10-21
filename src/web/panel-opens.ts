@@ -18,12 +18,23 @@
  * - `setEnabled(false)` drops everything still waiting; disposing the plugin
  *   closes the queues and detaches every stream.
  *
- * The stream is the browser half's `/pdfcraft/pushes` connection; this module keeps
- * only the decisions, and `open-routes.js` owns the HTTP adapter.
+ * The stream is the browser half's `/pdfcraft/pushes` connection; this module
+ * keeps only the decisions, and `open-routes.ts` owns the HTTP adapter.
  */
 import { randomUUID } from 'node:crypto'
 
 import { defineTool } from '@deepseek-ai/dsh-tools'
+
+import type { BoundDocument, OpenRequest } from '../shared/protocol.ts'
+import {
+  type CommandDefinition,
+  type CommandInput,
+  type CommandRegistry,
+  type Disposer,
+  type HostContext,
+  type ToolRegistry,
+} from './host.ts'
+import type { BindingRegistry } from './workspace-document.ts'
 
 /** The human entry point; the command name without its leading slash. */
 export const OPEN_COMMAND_NAME = 'pdfcraft'
@@ -31,41 +42,70 @@ export const OPEN_COMMAND_NAME = 'pdfcraft'
 /** The model-facing entry point. */
 export const OPEN_TOOL_NAME = 'pdfcraft_open'
 
-/**
- * One open request's canonical shape on the push stream.
- * @typedef {object} OpenRequest
- * @property {string} id - opaque id for logs and tests.
- * @property {string} sessionId - the conversation whose Panel should open.
- * @property {{path: string, name: string} | null} document - the bound document, or null for Standalone Mode.
- */
+/** One delivered or queued open. */
+export interface OpenOutcome {
+  readonly id: string
+  readonly delivered: boolean
+  readonly document: BoundDocument | null
+}
+
+/** The Push Channel's decision surface. */
+export interface PanelOpens {
+  /**
+   * Bind a conversation and queue (or deliver) its open request.
+   * @param sessionId - the conversation whose Panel should open.
+   * @param documentPath - the Workspace Document, or nothing for Standalone Mode.
+   */
+  open(sessionId: string, documentPath?: string | null): OpenOutcome
+  /**
+   * Attach one browser stream for a conversation and flush what was waiting.
+   * A sender that throws is detached by its owner; the request it was handed
+   * is not replayed, which keeps delivery exactly once.
+   * @param sessionId - the conversation the stream shows.
+   * @param send - writes one request to the stream.
+   * @returns detaches the stream.
+   */
+  attach(sessionId: string, send: (request: OpenRequest) => void): Disposer
+  /**
+   * Turn the entries on or off. Turning them off drops every request that has
+   * not reached a stream yet; an already-opened Panel is untouched.
+   */
+  setEnabled(next: boolean): void
+  /** Drop the queues and every attached stream; the plugin is going away. */
+  dispose(): void
+  /** Pending requests in bind order, for diagnostics and tests. */
+  pendingRequests(): OpenRequest[]
+}
+
+/** What `createPanelOpens` needs from its owner. */
+export interface PanelOpensOptions {
+  readonly bindings: BindingRegistry
+  /** Whether the two entries may create requests. */
+  readonly enabled?: boolean
+  /** Receives non-fatal failures. */
+  readonly warn?: (message: string) => void
+}
 
 /**
  * Create the Push Channel over one conversation binding registry.
- *
- * @param {object} options
- * @param {object} options.bindings - the per-conversation binding registry.
- * @param {boolean} [options.enabled] - whether the two entries may create requests.
- * @param {(message: string) => void} [options.warn] - receives non-fatal failures.
  */
-export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) {
+export function createPanelOpens({
+  bindings,
+  enabled = true,
+  warn = () => {},
+}: PanelOpensOptions): PanelOpens {
   /** Undelivered request per conversation; a later request replaces it. */
-  const pending = new Map()
+  const pending = new Map<string, OpenRequest>()
   /** Attached Push Channel streams per conversation, each a sender of one request. */
-  const streams = new Map()
+  const streams = new Map<string, Set<(request: OpenRequest) => void>>()
   let openEnabled = enabled !== false
 
-  const documentOf = (sessionId) => {
+  const documentOf = (sessionId: string): BoundDocument | null => {
     const document = bindings.get(sessionId)
     return document === undefined ? null : { path: document.path, name: document.name }
   }
 
-  /**
-   * Bind a conversation and queue (or deliver) its open request.
-   * @param {string} sessionId - the conversation whose Panel should open.
-   * @param {string | null | undefined} documentPath - the Workspace Document, or nothing for Standalone Mode.
-   * @returns {{id: string, delivered: boolean, document: {path: string, name: string} | null}}
-   */
-  function open(sessionId, documentPath) {
+  function open(sessionId: string, documentPath?: string | null): OpenOutcome {
     if (typeof sessionId !== 'string' || sessionId === '') {
       throw new TypeError('an open request needs a conversation id')
     }
@@ -77,7 +117,7 @@ export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) 
       bindings.bind(sessionId, documentPath)
     }
 
-    const request = Object.freeze({
+    const request: OpenRequest = Object.freeze({
       id: randomUUID(),
       sessionId,
       document: documentOf(sessionId),
@@ -93,7 +133,7 @@ export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) 
           send(request)
           return { id: request.id, delivered: true, document: request.document }
         } catch (error) {
-          warn(`dsh-pdfcraft: could not deliver an open for ${sessionId}: ${error.message}`)
+          warn(`dsh-pdfcraft: could not deliver an open for ${sessionId}: ${(error as Error).message}`)
         }
       }
     }
@@ -102,16 +142,7 @@ export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) 
     return { id: request.id, delivered: false, document: request.document }
   }
 
-  /**
-   * Attach one browser stream for a conversation and flush what was waiting.
-   * A sender that throws is detached by its owner; the request it was handed
-   * is not replayed, which keeps delivery exactly once.
-   *
-   * @param {string} sessionId - the conversation the stream shows.
-   * @param {(request: OpenRequest) => void} send - writes one request to the stream.
-   * @returns {() => void} detaches the stream.
-   */
-  function attach(sessionId, send) {
+  function attach(sessionId: string, send: (request: OpenRequest) => void): Disposer {
     if (typeof sessionId !== 'string' || sessionId === '') {
       throw new TypeError('a Push Channel stream needs a conversation id')
     }
@@ -128,7 +159,7 @@ export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) 
       try {
         send(waiting)
       } catch (error) {
-        warn(`dsh-pdfcraft: could not replay an open for ${sessionId}: ${error.message}`)
+        warn(`dsh-pdfcraft: could not replay an open for ${sessionId}: ${(error as Error).message}`)
       }
     }
 
@@ -140,23 +171,17 @@ export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) 
     }
   }
 
-  /**
-   * Turn the entries on or off. Turning them off drops every request that has
-   * not reached a stream yet; an already-opened Panel is untouched.
-   */
-  function setEnabled(next) {
+  function setEnabled(next: boolean): void {
     openEnabled = next !== false
     if (!openEnabled) pending.clear()
   }
 
-  /** Drop the queues and every attached stream; the plugin is going away. */
-  function dispose() {
+  function dispose(): void {
     pending.clear()
     streams.clear()
   }
 
-  /** Pending requests in bind order, for diagnostics and tests. */
-  function pendingRequests() {
+  function pendingRequests(): OpenRequest[] {
     return [...pending.values()]
   }
 
@@ -164,7 +189,7 @@ export function createPanelOpens({ bindings, enabled = true, warn = () => {} }) 
 }
 
 /** The success text shared by the command and the tool's renderer. */
-function deliveryText(document, delivered) {
+function deliveryText(document: BoundDocument | null, delivered: boolean): string {
   const name = document === null ? 'PdfCraft' : document.name
   return delivered
     ? `Opened ${name} in the PdfCraft Panel.`
@@ -172,12 +197,15 @@ function deliveryText(document, delivered) {
 }
 
 /** A registry service, probed without assuming it was injected. */
-function registryOf(ctx, name) {
+function registryOf<T>(ctx: HostContext, name: string): T | undefined {
+  let found: unknown
   try {
-    return ctx.get?.(name) ?? ctx[name]
+    found = ctx.get?.(name)
   } catch {
-    return undefined
+    found = undefined
   }
+  if (found !== undefined) return found as T
+  return (ctx as unknown as Record<string, unknown>)[name] as T | undefined
 }
 
 /**
@@ -187,23 +215,19 @@ function registryOf(ctx, name) {
  * to open the Panel at it. With no path it clears the binding, so the Panel
  * opens in Standalone Mode instead of failing. The handler never submits a
  * model message; this is the whole point of the command.
- *
- * @param {import('@deepseek-ai/cordis').Context} ctx - Host context carrying the command registry.
- * @param {ReturnType<typeof createPanelOpens>} opens - the Push Channel.
- * @returns {(() => void) | undefined} unregisters the command, or undefined without a registry.
  */
-export function registerOpenCommand(ctx, opens) {
-  const commands = registryOf(ctx, 'commands')
+export function registerOpenCommand(ctx: HostContext, opens: PanelOpens): Disposer | undefined {
+  const commands = registryOf<CommandRegistry>(ctx, 'commands')
   if (typeof commands?.register !== 'function') {
     ctx.logger?.warn?.('dsh-pdfcraft: no command registry is composed; the /pdfcraft command is unavailable')
     return undefined
   }
 
-  return commands.register({
+  const definition: CommandDefinition = {
     name: OPEN_COMMAND_NAME,
     description: 'Open a PDF from this conversation\'s workspace in the PdfCraft Panel',
     input: { hint: '[<path>] — omit the path to open Standalone Mode' },
-    handler: ({ agent, rawInput }) => {
+    handler: ({ agent, rawInput }: CommandInput) => {
       const sessionId = agent?.session?.id
       if (typeof sessionId !== 'string' || sessionId === '') {
         return { kind: 'error', text: 'PdfCraft needs a conversation to open the Panel in.' }
@@ -214,10 +238,12 @@ export function registerOpenCommand(ctx, opens) {
         const result = opens.open(sessionId, path === '' ? null : path)
         return { kind: 'success', text: deliveryText(result.document, result.delivered) }
       } catch (error) {
-        return { kind: 'error', text: `Could not open the PdfCraft Panel: ${error.message}` }
+        return { kind: 'error', text: `Could not open the PdfCraft Panel: ${(error as Error).message}` }
       }
     },
-  })
+  }
+
+  return commands.register(definition)
 }
 
 /**
@@ -229,13 +255,9 @@ export function registerOpenCommand(ctx, opens) {
  * is running in, exactly like the person's command. A path that is not in the
  * workspace is refused later, when the Panel reads it, by the same route that
  * guards the person's own opens.
- *
- * @param {import('@deepseek-ai/cordis').Context} ctx - Host context carrying the tool registry.
- * @param {ReturnType<typeof createPanelOpens>} opens - the Push Channel.
- * @returns {(() => void) | undefined} unregisters the tool, or undefined without a registry.
  */
-export function registerOpenTool(ctx, opens) {
-  const tools = registryOf(ctx, 'tools')
+export function registerOpenTool(ctx: HostContext, opens: PanelOpens): Disposer | undefined {
+  const tools = registryOf<ToolRegistry>(ctx, 'tools')
   if (typeof tools?.register !== 'function') {
     ctx.logger?.warn?.('dsh-pdfcraft: no tool registry is composed; the pdfcraft_open tool is unavailable')
     return undefined
