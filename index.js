@@ -32,7 +32,7 @@ import {
   PLUGIN_NAME,
   PUSHES_PATH,
   STATUS_PATH,
-} from './lib/paths.js'
+} from './dist/shared/paths.js'
 import { createAssetHandler, createStatusHandler } from './lib/web-build.js'
 import {
   createBindingRegistry,

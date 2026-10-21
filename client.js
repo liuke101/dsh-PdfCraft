@@ -27,9 +27,9 @@
  * the React and DOM glue.
  *
  * The locale namespace, page kind, addresses, release version, and web-build
- * filename are mirrored from `lib/paths.js` and `locale/*.json`; this file is a
- * self-contained classic script because the shell's module loader receives one
- * bundle per package.
+ * filename are mirrored from `src/shared/paths.ts` and `locale/*.json`; this
+ * file is a self-contained classic script because the shell's module loader
+ * receives one bundle per package.
  */
 
 window.__ModuleLoader__.load({
@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    /** Shared with lib/paths.js. */
+    /** Shared with src/shared/paths.ts until the browser build lands. */
     const LOCALE_NS = 'pdfcraft'
     const PAGE_KIND = 'pdfcraft'
     const APP_PATH = '/pdfcraft/'

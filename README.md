@@ -317,24 +317,28 @@ Remove any `pdfcraft` override from `$DSH_HOME/profiles/web/cordis.patch.yml`. T
 
 ## Development
 
-There is no build step and no TypeScript. The package is plain ESM for the Host and a self-contained classic script for the Web client.
+The host's shared constants are TypeScript; the rest of the Host is still plain ESM, and the Web client is a self-contained classic script. `npm run build` compiles `src/` into the committed `dist/`, so a clone installs with no toolchain. Edit `src/`, never `dist/`, and commit both.
 
 ```sh
+npm run build                     # tsc: compile src/ into the committed dist/
 npm test                          # the whole suite, node:test
-npm run lint                      # eslint: no-undef and no-unused-vars
-npm run typecheck                 # node --check on every source file
+npm run typecheck                 # tsc --noEmit over src/ and test/
+npm run lint                      # eslint over the JavaScript: no-undef and no-unused-vars
 node --test test/document-routes.test.js   # one suite
 ```
 
-The tests use only Node's built-in test runner and assertion library; the only development dependency is the linter. `.github/workflows/check.yml` runs all three on every push and pull request.
+The tests use only Node's built-in test runner and assertion library. Node 24 strips types from the test files and from the shared module, so the suite runs against `src/` directly with no transpile step. The TypeScript compiler and `@types/node` are pinned exactly with the other development dependencies. `.github/workflows/check.yml` builds, fails when the committed `dist/` is stale, lints, type-checks, and runs the suite on every push and pull request.
 
 The browser half has no test seam: a change to `client.js`, the document routes, or the open tool is verified by hand. Follow [docs/agents/e2e-verification.md](docs/agents/e2e-verification.md).
 
 ```text
 index.js              Host half: configuration, HTTP routes, route wiring
 client.js             Web half: sidebar registration, Host Bridge, Push Channel client
+src/
+  shared/paths.ts     public routes, release pin, asset constants (source)
+dist/
+  shared/paths.js     committed build output; what the Host imports
 lib/
-  paths.js            public routes, release pin, asset constants
   web-build.js        static asset and readiness routes
   workspace-document.js  containment, size limit, Revision Guard, binding registry
   document-routes.js  Workspace Document HTTP surface

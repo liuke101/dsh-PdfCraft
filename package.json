@@ -14,6 +14,7 @@
     "index.js",
     "client.js",
     "lib/*.js",
+    "dist/",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.png"
@@ -32,9 +33,10 @@
     }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
     "test": "node --test",
-    "lint": "eslint .",
-    "typecheck": "find . -name '*.js' -not -path './node_modules/*' -not -path './.npm-cache/*' -not -path './coverage/*' -not -path './.worktrees/*' -exec node --check {} \\;"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1",
@@ -43,7 +45,9 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "eslint": "^10.13.0",
-    "globals": "^17.13.0"
+    "@types/node": "24.19.2",
+    "eslint": "10.13.0",
+    "globals": "17.13.0",
+    "typescript": "7.0.2"
   }
 }

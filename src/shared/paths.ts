@@ -2,10 +2,12 @@
  * Public addresses of the Panel's HTTP surface, as one module so the host half,
  * its tests, and any future caller name the same paths.
  *
- * The browser half is a self-contained classic script, so it repeats the
- * addresses it calls (`APP_PATH`, `STATUS_PATH`, `BINDING_PATH`, `DOCUMENT_PATH`,
- * `PUSHES_PATH`) and the pinned release and web-build filename it falls back to;
- * keep them in sync.
+ * This file is the one source of the constants. `npm run build` compiles it to
+ * the committed `dist/shared/paths.js`, which the host imports. The browser
+ * half's own build will compile against this module too; until that lands,
+ * `client.js` still repeats the addresses it calls (`APP_PATH`, `STATUS_PATH`,
+ * `BINDING_PATH`, `DOCUMENT_PATH`, `PUSHES_PATH`) and the release pin and
+ * web-build filename it falls back to, so the two copies must stay in sync.
  */
 
 /** Loader row id and package name of this bundle. */
