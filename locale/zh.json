@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "dsh-pdfcraft",
+    "title": "dsh-pdfcraft-web",
     "description": "在右侧边栏打开 PdfCraft，并为每个对话的 agent 提供 PdfCraft 的 PDF 工具。"
   }
 }

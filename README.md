@@ -25,7 +25,7 @@ The bundle patch inserts two Loader rows, and both are active at once:
 | `pdfcraft-web` | `dsh-pdfcraft` (the bare package name) | The Embedded App assets and readiness report, the Workspace Document read and Write-back routes, the binding registry and Push Channel services, the `/pdfcraft` command, and the `pdfcraft_open` tool. |
 | `pdfcraft-cli` | `dsh-pdfcraft/cli` | The per-agent PdfCraft engines and their lifecycle. |
 
-The package exposes both entries: `exports["."]`, with `exports["./web"]` as its alias, resolves to the Web Component (`dist/web/index.js`); `exports["./cli"]` resolves to the CLI Component (`dist/cli/index.js`). Display metadata is package-level: both rows share the package's one `locale/`, so the bundle and both component rows are titled `dsh-pdfcraft`, with a description naming the Panel and the agent tools. The Panel page keeps its own title, `PdfCraft`.
+The package exposes both entries: `exports["."]`, with `exports["./web"]` as its alias, resolves to the Web Component (`dist/web/index.js`); `exports["./cli"]` resolves to the CLI Component (`dist/cli/index.js`). Each row is titled from the specifier it names: `locale/*.json` titles the `pdfcraft-web` row `dsh-pdfcraft-web`, and `locale/cli/*.json`, exported as `./cli/locale/*.json`, titles the `pdfcraft-cli` row `dsh-pdfcraft-cli`. Because the bare package name is shared, the bundle itself carries the Web Component's title too; the Panel page keeps its own title, `PdfCraft`.
 
 The Web row keeps the bare package name because the shell's `dsh-client-modules` reads a package's `dsh.client` declaration only from a bare Loader row. The Panel's browser half is part of that package, so it activates with the Web row: disabling `pdfcraft-web` withdraws the Panel page and its routes as well as the command and the open tool. Disabling `pdfcraft-cli` withdraws only the agent's engines; the Panel keeps opening, reading and writing back. Disabling `pdfcraft-web` leaves the MCP tools working, because they live in the CLI Component.
 
@@ -157,7 +157,7 @@ Start DSH and check the result:
 dsh web
 ```
 
-- The plugin list shows the bundle `dsh-pdfcraft` with two active rows, `pdfcraft-web` and `pdfcraft-cli`. Both must be active for the Panel and the agent's tools together; each works without the other.
+- The plugin list shows the bundle and the `pdfcraft-web` row as `dsh-pdfcraft-web`, and the `pdfcraft-cli` row as `dsh-pdfcraft-cli`. Both rows must be active for the Panel and the agent's tools together; each works without the other.
 - The right sidebar has exactly one **PdfCraft** entry: through DSH-better-sidebar when that plugin is active, otherwise through DSH's own right sidebar. The plugin never registers both.
 - Typing `/pdfcraft` in a conversation opens the Panel in Standalone Mode.
 - The agent's tool list contains tools named `mcp__pdfcraft-<hash>__<tool>`; the hash is derived from the workspace and stays stable for it.
@@ -397,7 +397,7 @@ dist/
   web/index.js        committed Web Component build; what the bare Loader row imports
   web/client.js       committed browser bundle; what the shell loads
   cli/index.js        committed CLI Component build; what the subpath Loader row imports
-locale/               plugin-listing text in English and Chinese; Panel copy is in src/web/client/copy.ts
+locale/               plugin-listing text: locale/*.json titles the Web row and the bundle, locale/cli/*.json the CLI row; Panel copy is in src/web/client/copy.ts
 cordis.patch.yml      the bundle patch: the two component rows
 test/                 node:test suites, one per seam
 docs/adr/             the architecture decisions

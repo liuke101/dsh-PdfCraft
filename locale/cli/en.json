@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-pdfcraft-cli",
+    "description": "Gives each conversation's agent the PdfCraft PDF tools."
+  }
+}

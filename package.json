@@ -17,7 +17,7 @@
       "types": "./dist/cli/index.d.ts",
       "default": "./dist/cli/index.js"
     },
-    "./cli/locale/*.json": "./locale/*.json",
+    "./cli/locale/*.json": "./locale/cli/*.json",
     "./client": "./dist/web/client.js",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.png"
@@ -25,7 +25,7 @@
   "files": [
     "dist/",
     "cordis.patch.yml",
-    "locale/*.json",
+    "locale/",
     "icon.png"
   ],
   "dsh": {

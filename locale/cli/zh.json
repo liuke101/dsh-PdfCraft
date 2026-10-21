@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-pdfcraft-cli",
+    "description": "为每个对话的 agent 提供 PdfCraft 的 PDF 工具。"
+  }
+}
