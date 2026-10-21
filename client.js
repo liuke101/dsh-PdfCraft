@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    /** Shared with src/shared/paths.ts until the browser build lands. */
+    /** Mirrored from src/shared/paths.ts; see ADR-0002. */
     const LOCALE_NS = 'pdfcraft'
     const PAGE_KIND = 'pdfcraft'
     const APP_PATH = '/pdfcraft/'

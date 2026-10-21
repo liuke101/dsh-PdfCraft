@@ -317,10 +317,10 @@ Remove any `pdfcraft` override from `$DSH_HOME/profiles/web/cordis.patch.yml`. T
 
 ## Development
 
-The host's shared constants are TypeScript; the rest of the Host is still plain ESM, and the Web client is a self-contained classic script. `npm run build` compiles `src/` into the committed `dist/`, so a clone installs with no toolchain. Edit `src/`, never `dist/`, and commit both.
+The host's shared constants are TypeScript; the rest of the Host is still plain ESM, and the Web client is a self-contained classic script. `npm run build` clears `dist/` and compiles `src/` into it, so a clone installs with no toolchain and removed sources cannot leave stale output behind. Edit `src/`, never `dist/`, and commit both.
 
 ```sh
-npm run build                     # tsc: compile src/ into the committed dist/
+npm run build                     # clean dist/, then tsc: compile src/ into it
 npm test                          # the whole suite, node:test
 npm run typecheck                 # tsc --noEmit over src/ and test/
 npm run lint                      # eslint over the JavaScript: no-undef and no-unused-vars

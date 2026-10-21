@@ -1,8 +1,8 @@
 /**
- * The shared route and release module is the contract between the host, the
- * browser half, and whatever is installed. These tests pin the published
- * addresses and the release pin, and prove the module loads under Node's own
- * type stripping — `node --test` runs this file with no transpile step.
+ * The shared route and release module is the host's public contract: the
+ * published addresses, the Revision Guard header, and the upstream release
+ * pin. These tests pin those values and prove the module loads under Node's
+ * own type stripping — `node --test` runs this file with no transpile step.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'

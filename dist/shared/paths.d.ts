@@ -2,12 +2,13 @@
  * Public addresses of the Panel's HTTP surface, as one module so the host half,
  * its tests, and any future caller name the same paths.
  *
- * This file is the one source of the constants. `npm run build` compiles it to
- * the committed `dist/shared/paths.js`, which the host imports. The browser
- * half's own build will compile against this module too; until that lands,
- * `client.js` still repeats the addresses it calls (`APP_PATH`, `STATUS_PATH`,
+ * This file is the host's one source of the constants. `npm run build`
+ * compiles it to the committed `dist/shared/paths.js`, which the host imports.
+ * The browser half is still a self-contained classic script (ADR-0002), so
+ * `client.js` repeats the addresses it calls (`APP_PATH`, `STATUS_PATH`,
  * `BINDING_PATH`, `DOCUMENT_PATH`, `PUSHES_PATH`) and the release pin and
- * web-build filename it falls back to, so the two copies must stay in sync.
+ * web-build filename it falls back to; the follow-up browser build removes
+ * that mirror. Until then, keep the two copies in step.
  */
 /** Loader row id and package name of this bundle. */
 export declare const PLUGIN_NAME = "dsh-pdfcraft";
