@@ -4,9 +4,11 @@ The unit tests drive decisions, not the browser. The glue that turns a save into
 a write-back — frame message → fetch → conflict dialog — has no seam, and one
 defect there (`readFailure is not defined`, see #10) shipped past a green suite
 and was caught only by walking the interface by hand. Run this whenever a change
-touches the browser half (`src/web/client/`), the Workspace Document routes
-(`src/web/document-routes.ts`), or the open tool (`src/web/panel-opens.ts`), and
-before closing a map whose Testing Decisions call for manual verification.
+touches the browser half (`src/web/client/`), the Web Component's routes
+(`src/web/web-build.ts`, `src/web/document-routes.ts`), or its open entries
+(`src/web/panel-opens.ts`), or changes how the CLI Component mounts or withdraws
+an engine (`src/cli/agent-tools.ts`). Run it before closing a map whose Testing
+Decisions call for manual verification.
 
 ## Before you start
 
@@ -62,6 +64,9 @@ each in turn.
 ## The two rows
 
 Run these with the rest of the checklist; they prove the split, not the Panel.
+Rows 9–11 exercise engine mount and withdrawal; the idle release and disposal
+decisions are driven by `test/agent-tools.test.ts`, so this checklist does not
+wait out the idle timer.
 
 9. **Both rows active** — the plugin list shows `pdfcraft-web` and
    `pdfcraft-cli` active at once, the Panel is a single page, and the agent's

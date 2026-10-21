@@ -25,6 +25,8 @@ The bundle patch inserts two Loader rows, and both are active at once:
 | `pdfcraft-web` | `dsh-pdfcraft` (the bare package name) | The Embedded App assets and readiness report, the Workspace Document read and Write-back routes, the binding registry and Push Channel services, the `/pdfcraft` command, and the `pdfcraft_open` tool. |
 | `pdfcraft-cli` | `dsh-pdfcraft/cli` | The per-agent PdfCraft engines and their lifecycle. |
 
+The package exposes both entries: `exports["."]`, with `exports["./web"]` as its alias, resolves to the Web Component (`dist/web/index.js`); `exports["./cli"]` resolves to the CLI Component (`dist/cli/index.js`). Display metadata is package-level: the package's one `locale/` gives the bundle and the `pdfcraft-web` row the display title `dsh-pdfcraft`, while the `pdfcraft-cli` row falls back to its module specifier, `dsh-pdfcraft/cli`. The Panel page keeps its own title, `PdfCraft`.
+
 The Web row keeps the bare package name because the shell's `dsh-client-modules` reads a package's `dsh.client` declaration only from a bare Loader row. The Panel's browser half is part of that package, so it activates with the Web row: disabling `pdfcraft-web` withdraws the Panel page and its routes as well as the command and the open tool. Disabling `pdfcraft-cli` withdraws only the agent's engines; the Panel keeps opening, reading and writing back. Disabling `pdfcraft-web` leaves the MCP tools working, because they live in the CLI Component.
 
 ```text
@@ -155,7 +157,7 @@ Start DSH and check the result:
 dsh web
 ```
 
-- The plugin list shows two active rows, `pdfcraft-web` and `pdfcraft-cli`. Both must be active for the Panel and the agent's tools together; each works without the other.
+- The plugin list shows the bundle `dsh-pdfcraft` with two active rows, `pdfcraft-web` and `pdfcraft-cli`. Both must be active for the Panel and the agent's tools together; each works without the other.
 - The right sidebar has exactly one **PdfCraft** entry: through DSH-better-sidebar when that plugin is active, otherwise through DSH's own right sidebar. The plugin never registers both.
 - Typing `/pdfcraft` in a conversation opens the Panel in Standalone Mode.
 - The agent's tool list contains tools named `mcp__pdfcraft-<hash>__<tool>`; the hash is derived from the workspace and stays stable for it.

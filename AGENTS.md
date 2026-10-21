@@ -16,7 +16,7 @@ Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents
 
 ### End-to-end verification
 
-A change to the browser half (`src/web/client/`), the workspace-document routes (`src/web/`), or the open tool is verified in the live interface, not just by the suite. Follow `docs/agents/e2e-verification.md`.
+The bundle activates as two Loader rows: `pdfcraft-web` (the Panel, its routes, command and open tool) and `pdfcraft-cli` (the per-agent engines); both are active by default. A change to the browser half or the Web Component's host surface (`src/web/`, including `src/web/client/`) is verified in the live interface, not just by the suite. Changes to the CLI Component (`src/cli/`) are covered by its suite and by the checklist's two-row checks. Follow `docs/agents/e2e-verification.md`.
 
 ### Commit Conventions
 
