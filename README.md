@@ -1,5 +1,7 @@
 # dsh-PdfCraft
 
+![dsh-pdfcraft banner: a lion carrying a whale through a painted jungle](docs/assets/banner.png)
+
 A DeepSeek Harness bundle that puts [PdfCraft](https://github.com/storytold/pdfcraft) in DSH's right sidebar and gives the conversation's agent the upstream PdfCraft MCP tools, confined by default to that conversation's workspace.
 
 The workspace file is where the person and the agent meet. The Panel edits the real PDF on disk; the agent edits the same file through `pdfcraft-cli`; a save made in the Panel is written back under a revision guard, so a change the agent made in the meantime is never overwritten silently.
@@ -401,6 +403,7 @@ locale/               plugin-listing text: locale/*.json titles the Web row and 
 cordis.patch.yml      the bundle patch: the two component rows
 test/                 node:test suites, one per seam
 docs/adr/             the architecture decisions
+docs/assets/          documentation media, such as the README banner
 GLOSSARY.md           the domain vocabulary
 ```
 
