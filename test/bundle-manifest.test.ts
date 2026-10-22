@@ -52,13 +52,13 @@ test('the package carries both component entries, a browser half, and display re
   assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10], 'icon.png is a PNG')
   assert.equal(icon.readUInt32BE(16), icon.readUInt32BE(20), 'the artwork is square')
 
-  // Each row is titled from the specifier it names. The bare package name
-  // serves both the bundle and the Web row, so the bundle carries the Web
-  // Component's title; the Panel page keeps its own title in the browser
+  // The bare package name serves both the bundle and the Web row, so those two
+  // carry the package title `dsh-pdfcraft`; the CLI row keeps its own
+  // `dsh-pdfcraft-cli`. The Panel page keeps its own title in the browser
   // half's copy.
   for (const locale of ['en', 'zh']) {
     const dictionary = JSON.parse(await text(`locale/${locale}.json`))
-    assert.equal(dictionary.meta.title, 'dsh-pdfcraft-web')
+    assert.equal(dictionary.meta.title, 'dsh-pdfcraft')
     assert.equal(typeof dictionary.meta.description, 'string')
     assert.match(dictionary.meta.description, /PdfCraft/)
     assert.match(dictionary.meta.description, /agent/, 'the listing covers the agent tools too')
@@ -71,7 +71,7 @@ test('the package carries both component entries, a browser half, and display re
   }
 })
 
-test('each component specifier resolves the locale that titles its row', () => {
+test('each component specifier resolves its own locale file', () => {
   for (const language of ['en', 'zh']) {
     assert.equal(
       import.meta.resolve(`dsh-pdfcraft/locale/${language}.json`),

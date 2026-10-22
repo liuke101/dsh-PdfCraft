@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "dsh-pdfcraft-web",
+    "title": "dsh-pdfcraft",
     "description": "Opens PdfCraft in the right sidebar and gives each conversation's agent the PdfCraft PDF tools."
   }
 }
