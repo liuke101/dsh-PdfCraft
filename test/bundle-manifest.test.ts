@@ -107,24 +107,46 @@ test('the bundle patch inserts the two component rows and keeps the web row a ba
   assert.match(patch, /webBuildDir: !!js dshHomePath\('pdfcraft', 'web'\)/)
 })
 
-test('the README migration table moves every old field to its component row', async () => {
-  const readme = await text('README.md')
-  const start = readme.indexOf('### Migrating from the old single row')
-  assert.ok(start >= 0, 'the README documents the migration from the old row')
-  const section = readme.slice(start).split(/\n#{2,3} /)[0] ?? ''
-
-  for (const field of [
-    'webBuildDir',
-    'openTool',
-    'maxDocumentBytes',
-    'cliPath',
-    'staticRoot',
-    'compactSurface',
+test('both README editions carry the migration table for the split rows', async () => {
+  // The English edition is the entry point; the Chinese edition has to keep
+  // the same table, so a reader of either language can move every override.
+  for (const edition of [
+    { file: 'README.md', heading: '### Migrating from the old single row' },
+    { file: 'README.zh.md', heading: '### 从旧的单行迁移' },
   ]) {
-    assert.match(section, new RegExp(`\`${field}\``), `${field} is in the migration table`)
+    const readme = await text(edition.file)
+    const start = readme.indexOf(edition.heading)
+    assert.ok(start >= 0, `${edition.file} documents the migration from the old row`)
+    const section = readme.slice(start).split(/\n#{2,3} /)[0] ?? ''
+
+    for (const field of [
+      'webBuildDir',
+      'openTool',
+      'maxDocumentBytes',
+      'cliPath',
+      'staticRoot',
+      'compactSurface',
+    ]) {
+      assert.match(section, new RegExp(`\`${field}\``), `${field} is in the ${edition.file} migration table`)
+    }
+    assert.match(section, /pdfcraft-web/)
+    assert.match(section, /pdfcraft-cli/)
   }
-  assert.match(section, /pdfcraft-web/)
-  assert.match(section, /pdfcraft-cli/)
+})
+
+test('both README editions open on the banner and link to each other under it', async () => {
+  const english = await text('README.md')
+  const chinese = await text('README.zh.md')
+
+  for (const readme of [english, chinese]) {
+    const banner = readme.indexOf('docs/assets/banner.png')
+    const switcher = readme.indexOf('<p align="center">')
+    assert.ok(banner >= 0, 'the banner is in the README')
+    assert.ok(switcher > banner, 'the language switcher sits under the banner')
+    assert.ok(readme.indexOf('</p>', switcher) > switcher, 'the switcher is a centered block')
+  }
+  assert.match(english, /href="README\.zh\.md"/, 'the English edition links to the Chinese one')
+  assert.match(chinese, /href="README\.md"/, 'the Chinese edition links to the English one')
 })
 
 test('the committed browser bundle keeps the module-loader envelope and the package id', async () => {

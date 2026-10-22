@@ -2,6 +2,10 @@
 
 ![dsh-pdfcraft banner: a lion carrying a whale through a painted jungle](docs/assets/banner.png)
 
+<p align="center">
+  <strong>English</strong> · <a href="README.zh.md">简体中文</a>
+</p>
+
 A DeepSeek Harness bundle that puts [PdfCraft](https://github.com/storytold/pdfcraft) in DSH's right sidebar and gives the conversation's agent the upstream PdfCraft MCP tools, confined by default to that conversation's workspace.
 
 The workspace file is where the person and the agent meet. The Panel edits the real PDF on disk; the agent edits the same file through `pdfcraft-cli`; a save made in the Panel is written back under a revision guard, so a change the agent made in the meantime is never overwritten silently.
