@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 import { apply, Config } from '../src/cli/index.ts'
 import { apply as applyWeb } from '../src/web/index.ts'
@@ -175,13 +176,27 @@ async function workspace() {
   return { root, cleanup: () => rm(root, { recursive: true, force: true }) }
 }
 
-/** Wait for fire-and-forget engine work the lifecycle listeners started. */
-async function until(predicate: () => boolean): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+/**
+ * Wait for the fire-and-forget engine work the lifecycle listeners started.
+ *
+ * The wait is bounded by the clock, not by a turn count. A fixed number of
+ * `setImmediate` turns elapses in a millisecond or two, while the work being
+ * awaited — a directory `stat`, the lazy bridge import, a fiber mount — needs
+ * real wall time and stretches on a loaded machine, so a turn-counted wait
+ * fails intermittently instead of waiting longer.
+ *
+ * `timers/promises` is used rather than the global `setTimeout` because the
+ * idle-grace tests here mock that global; this wait must keep working while
+ * the engine's own grace timer is mocked.
+ */
+async function until(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = process.hrtime.bigint() + BigInt(timeoutMs) * 1_000_000n
+  for (;;) {
     if (predicate()) return
-    await new Promise((resolve) => setImmediate(resolve))
+    if (process.hrtime.bigint() >= deadline) break
+    await sleep(1)
   }
-  assert.fail('the expected engine work did not settle')
+  assert.fail(`the expected engine work did not settle within ${timeoutMs}ms`)
 }
 
 /** The engine mount every live Agent must get for one root. */
