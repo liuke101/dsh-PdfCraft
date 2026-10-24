@@ -149,6 +149,55 @@ test('both README editions open on the banner and link to each other under it', 
   assert.match(chinese, /href="README\.md"/, 'the Chinese edition links to the English one')
 })
 
+// The harness supplies its own copies of the shared packages and routes a
+// plugin's bare import of one to the copy the running runtime was built with
+// (`routeLinked` in `@deepseek-ai/dsh-app-boot`). That routing only fires when
+// the plugin lists the package as a *peer*: a `dependencies` entry lets the
+// plugin's own tree win, so a pinned copy shadows the runtime's and the two
+// drift apart on the next harness release. Declaring them as peers also makes
+// `evaluatePluginCompatibility` see the requirement at all, because it reads
+// `engines.dsh` or the `@deepseek-ai/dsh-*` peer ranges and ignores plain
+// dependencies.
+test('the harness-owned packages are peers, not bundled dependencies', async () => {
+  const manifest = JSON.parse(await text('package.json'))
+  const harnessOwned = [
+    '@deepseek-ai/dsh-tools',
+    '@deepseek-ai/dsh-mcp-client',
+  ]
+
+  for (const name of harnessOwned) {
+    assert.equal(
+      manifest.dependencies?.[name],
+      undefined,
+      `${name} must not be a dependency: a pinned copy shadows the runtime's`,
+    )
+    assert.equal(
+      typeof manifest.peerDependencies?.[name],
+      'string',
+      `${name} is a peer the harness supplies`,
+    )
+    // The runtime ships these at the version it was built with, so the range
+    // has to admit both the version this repo develops against and the one the
+    // harness installs. A caret on a prerelease admits the whole 0.2.1 line.
+    assert.match(
+      manifest.peerDependencies[name],
+      /^\^0\.2\.1-rc\.1$/,
+      `${name} admits the runtime's own copy`,
+    )
+    assert.equal(
+      typeof manifest.devDependencies?.[name],
+      'string',
+      `${name} stays a dev dependency so the suite and the types resolve`,
+    )
+  }
+
+  // schemastery is a plain library, not a harness service: it carries no
+  // `@deepseek-ai/dsh-` prefix, so compatibility never inspects it and a
+  // dependency is the correct declaration.
+  assert.equal(manifest.dependencies['@deepseek-ai/schemastery'], '~3.18.5')
+  assert.equal(manifest.peerDependencies['@deepseek-ai/schemastery'], undefined)
+})
+
 test('the committed browser bundle keeps the module-loader envelope and the package id', async () => {
   const bundle = await text('dist/web/client.js')
 

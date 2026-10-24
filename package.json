@@ -48,12 +48,16 @@
     "test": "node --test"
   },
   "dependencies": {
-    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1",
-    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
     "@deepseek-ai/schemastery": "~3.18.5"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-mcp-client": "^0.2.1-rc.1",
+    "@deepseek-ai/dsh-tools": "^0.2.1-rc.1"
   },
   "license": "MIT",
   "devDependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.2.1-rc.1",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.1",
     "@types/node": "24.19.2",
     "@types/react": "18.3.31",
     "tsdown": "0.23.1",
